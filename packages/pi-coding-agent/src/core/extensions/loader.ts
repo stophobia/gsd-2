@@ -39,6 +39,7 @@ import { execCommand } from "../exec.js";
 import { getUntrustedExtensionPaths } from "./project-trust.js";
 export { isProjectTrusted, trustProject, getUntrustedExtensionPaths } from "./project-trust.js";
 import { registerToolCompatibility } from "../tools/tool-compatibility-registry.js";
+import { mergeExtensionEntryPaths } from "../../../../../src/extension-discovery.js";
 import type {
 	Extension,
 	ExtensionAPI,
@@ -1034,7 +1035,12 @@ export async function discoverAndLoadExtensions(
 
 	// 2. Global extensions: agentDir/extensions/
 	const globalExtDir = path.join(agentDir, "extensions");
-	addPaths(discoverExtensionsInDir(globalExtDir));
+	// 2b. Installed extensions: ~/.gsd/extensions/ merged with bundled (D-14, D-15)
+	// Discovery handles ID-based merge — loader stays dumb.
+	const installedExtDir = path.join(path.dirname(agentDir), "extensions");
+	const globalPaths = discoverExtensionsInDir(globalExtDir);
+	const mergedPaths = mergeExtensionEntryPaths(globalPaths, installedExtDir);
+	addPaths(mergedPaths);
 
 	// 3. Explicitly configured paths
 	for (const p of configuredPaths) {
