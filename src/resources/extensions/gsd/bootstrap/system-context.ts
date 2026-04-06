@@ -280,6 +280,23 @@ async function buildGuidedExecuteContextInjection(prompt: string, basePath: stri
     }
   }
 
+  // Fallback: unstructured prompt (e.g., "continue", "ok", "go ahead") but
+  // state shows an active executing task — inject task context so the agent
+  // doesn't rebuild from scratch (#3615).
+  // Phase-gated: only fire during "executing" to avoid misrouting during
+  // replanning, gate evaluation, or other non-execution phases where
+  // activeTask may still be set.
+  const state = await deriveState(basePath);
+  if (state.phase === "executing" && state.activeTask && state.activeMilestone && state.activeSlice) {
+    return buildTaskExecutionContextInjection(
+      basePath,
+      state.activeMilestone.id,
+      state.activeSlice.id,
+      state.activeTask.id,
+      state.activeTask.title,
+    );
+  }
+
   return null;
 }
 
