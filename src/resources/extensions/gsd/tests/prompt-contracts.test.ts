@@ -121,16 +121,29 @@ test("guided-complete-slice prompt references gsd_slice_complete tool", () => {
 
 test("complete-slice prompt instructs writing summary and UAT files before tool call", () => {
   const prompt = readPrompt("complete-slice");
-  // The prompt instructs writing the summary AND UAT files, then calling the tool
   assert.match(prompt, /\{\{sliceSummaryPath\}\}/);
   assert.match(prompt, /\{\{sliceUatPath\}\}/);
   assert.match(prompt, /gsd_complete_slice/);
+  assert.match(prompt, /DB-backed tool is the canonical write path/i);
+  assert.match(prompt, /Do \*\*not\*\* manually write `?\{\{sliceSummaryPath\}\}`?/i);
+  assert.match(prompt, /Do \*\*not\*\* manually write `?\{\{sliceUatPath\}\}`?/i);
+  assert.doesNotMatch(prompt, /^\d+\.\s+Write `?\{\{sliceSummaryPath\}\}`?.*$/m);
+  assert.doesNotMatch(prompt, /^\d+\.\s+Write `?\{\{sliceUatPath\}\}`?.*$/m);
 });
 
 test("complete-slice prompt preserves decisions and knowledge review steps", () => {
   const prompt = readPrompt("complete-slice");
   assert.match(prompt, /DECISIONS\.md/);
   assert.match(prompt, /KNOWLEDGE\.md/);
+});
+
+test("validate-milestone prompt uses gsd_validate_milestone as canonical validation write path", () => {
+  const prompt = readPrompt("validate-milestone");
+  assert.match(prompt, /gsd_validate_milestone/);
+  assert.match(prompt, /\{\{validationPath\}\}/);
+  assert.match(prompt, /DB-backed tool is the canonical write path/i);
+  assert.match(prompt, /Do \*\*not\*\* manually write `?\{\{validationPath\}\}`?/i);
+  assert.doesNotMatch(prompt, /Write to `?\{\{validationPath\}\}`?:/i);
 });
 
 test("complete-slice prompt still contains template variables for context", () => {
