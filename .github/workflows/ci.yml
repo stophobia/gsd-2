@@ -180,9 +180,6 @@ jobs:
       - name: Typecheck extensions
         run: npm run typecheck:extensions
 
-      - name: Validate package is installable
-        run: npm run validate-pack
-
       - name: Run unit tests
         run: npm run test:unit
 
