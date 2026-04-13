@@ -73,8 +73,14 @@ export async function startMcpServer(options: {
     })),
   }))
 
-  // tools/call — execute the requested tool and return content blocks
-  server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
+  // tools/call — execute the requested tool and return content blocks.
+  //
+  // The MCP SDK passes an `extra` argument to request handlers that includes
+  // an AbortSignal scoped to the RPC request (cancelled when the client
+  // cancels the tool call or the transport closes). Threading it into
+  // AgentTool.execute ensures long-running tools (Bash, WebFetch, grep on
+  // huge trees) actually stop when the client gives up on the result.
+  server.setRequestHandler(CallToolRequestSchema, async (request: any, extra: any) => {
     const { name, arguments: args } = request.params
     const tool = toolMap.get(name)
     if (!tool) {
@@ -84,22 +90,37 @@ export async function startMcpServer(options: {
       }
     }
 
+    const signal: AbortSignal | undefined = extra?.signal
+
     try {
       const result = await tool.execute(
         `mcp-${Date.now()}`,
         args ?? {},
-        undefined, // no AbortSignal
-        undefined, // no onUpdate callback
+        signal,
+        undefined, // onUpdate not yet wired — progress notifications require a progressToken round-trip
       )
 
-      // Convert AgentToolResult content blocks to MCP content format
+      // Convert AgentToolResult content blocks to MCP content format.
+      // text and image pass through; any other shape is serialized as text
+      // so the client sees the payload rather than an empty response.
       const content = result.content.map((block: any) => {
         if (block.type === 'text') return { type: 'text' as const, text: block.text ?? '' }
-        if (block.type === 'image') return { type: 'image' as const, data: block.data ?? '', mimeType: block.mimeType ?? 'image/png' }
+        if (block.type === 'image') {
+          return {
+            type: 'image' as const,
+            data: block.data ?? '',
+            mimeType: block.mimeType ?? 'image/png',
+          }
+        }
+        // Preserve unknown block types (resource, resource_link, audio, ...)
+        // by stringifying into a text block so clients see the payload.
         return { type: 'text' as const, text: JSON.stringify(block) }
       })
       return { content }
     } catch (err: unknown) {
+      // AbortError from a cancelled tool surfaces as a normal error — MCP
+      // clients interpret `isError: true` as a failed call, which is the
+      // correct behaviour for a cancelled request.
       const message = err instanceof Error ? err.message : String(err)
       return { isError: true, content: [{ type: 'text' as const, text: message }] }
     }
