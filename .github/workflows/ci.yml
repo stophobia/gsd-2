@@ -130,6 +130,15 @@ jobs:
       - name: Install web host dependencies
         run: npm --prefix web ci
 
+      - name: Cache Next.js build
+        uses: useblacksmith/cache@v5
+        with:
+          path: web/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-${{ hashFiles('web/app/**', 'web/components/**', 'web/lib/**', 'web/hooks/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-
+            nextjs-${{ runner.os }}-
+
       - name: Build
         run: npm run build
 
