@@ -15,6 +15,7 @@ import { resolveModelForComplexity, escalateTier, getEligibleModels, loadCapabil
 import { getLedger, getProjectTotals } from "./metrics.js";
 import { unitPhaseLabel } from "./auto-dashboard.js";
 import { getSessionModelOverride } from "./session-model-override.js";
+import { logWarning } from "./workflow-logger.js";
 
 export interface ModelSelectionResult {
   /** Routing metadata for metrics recording */
@@ -25,14 +26,8 @@ export interface ModelSelectionResult {
 
 export function resolvePreferredModelConfig(
   unitType: string,
-  autoModeStartModel: { provider: string; id: string } | null,
-  /** When false, only return explicit per-phase model configs — do not
-   *  synthesize a routing ceiling from dynamic_routing.tier_models (#3962). */
+  autoModeStartModel: { provider: string; id: string; flatRateCtx?: FlatRateContext } | null,
   isAutoMode = true,
-  /** Optional flat-rate context for the start model's provider.  Used to
-   *  extend flat-rate detection beyond the built-in list (user
-   *  `flat_rate_providers` preference + externalCli auto-detection). */
-  flatRateCtx?: FlatRateContext,
 ) {
   const explicitConfig = resolveModelWithFallbacksForUnit(unitType);
   if (explicitConfig) return explicitConfig;
@@ -45,7 +40,7 @@ export function resolvePreferredModelConfig(
   if (!routingConfig.enabled || !routingConfig.tier_models) return undefined;
 
   // Don't synthesize a routing config for flat-rate providers (#3453).
-  if (autoModeStartModel && isFlatRateProvider(autoModeStartModel.provider, flatRateCtx)) return undefined;
+  if (autoModeStartModel && isFlatRateProvider(autoModeStartModel.provider, autoModeStartModel.flatRateCtx)) return undefined;
 
   const ceilingModel = routingConfig.tier_models.heavy
     ?? (autoModeStartModel ? `${autoModeStartModel.provider}/${autoModeStartModel.id}` : undefined);
@@ -72,7 +67,7 @@ export async function selectAndApplyModel(
   basePath: string,
   prefs: GSDPreferences | undefined,
   verbose: boolean,
-  autoModeStartModel: { provider: string; id: string } | null,
+  autoModeStartModel: { provider: string; id: string; flatRateCtx?: FlatRateContext } | null,
   retryContext?: { isRetry: boolean; previousTier?: string },
   /** When false (interactive/guided-flow), skip dynamic routing and use the session model.
    *  Dynamic routing only applies in auto-mode where cost optimization is expected. (#3962) */
@@ -83,17 +78,20 @@ export async function selectAndApplyModel(
   const effectiveSessionModelOverride = sessionModelOverride === undefined
     ? getSessionModelOverride(ctx.sessionManager.getSessionId())
     : (sessionModelOverride ?? undefined);
-  // Build a flat-rate context for the start model's provider up front so
-  // routing synthesis and the dispatch-time guard see the same signals
-  // (built-in list + user `flat_rate_providers` preference + externalCli
-  // auto-detection).  The dispatch-time primary-model check below builds
-  // its own per-provider context when it has a resolved primary model.
-  const startModelFlatRateCtx = autoModeStartModel
-    ? buildFlatRateContext(autoModeStartModel.provider, ctx, prefs)
-    : undefined;
+  // Enrich the start model with a flat-rate context up front so routing
+  // synthesis and the dispatch-time guard see the same signals (built-in
+  // list + user `flat_rate_providers` preference + externalCli auto-
+  // detection).  The dispatch-time primary-model check below builds its
+  // own per-provider context when it has a resolved primary model.
+  if (autoModeStartModel) {
+    autoModeStartModel = {
+      ...autoModeStartModel,
+      flatRateCtx: buildFlatRateContext(autoModeStartModel.provider, ctx, prefs),
+    };
+  }
   const modelConfig = effectiveSessionModelOverride
     ? undefined
-    : resolvePreferredModelConfig(unitType, autoModeStartModel, isAutoMode, startModelFlatRateCtx);
+    : resolvePreferredModelConfig(unitType, autoModeStartModel, isAutoMode);
   let routing: { tier: string; modelDowngraded: boolean } | null = null;
   let appliedModel: Model<Api> | null = null;
 
@@ -124,7 +122,7 @@ export async function selectAndApplyModel(
           routingConfig.enabled = false;
         }
       } else if (
-        (autoModeStartModel && isFlatRateProvider(autoModeStartModel.provider, startModelFlatRateCtx))
+        (autoModeStartModel && isFlatRateProvider(autoModeStartModel.provider, autoModeStartModel.flatRateCtx))
         || (ctx.model?.provider && isFlatRateProvider(
           ctx.model.provider,
           buildFlatRateContext(ctx.model.provider, ctx, prefs),
@@ -483,8 +481,13 @@ export function buildFlatRateContext(
       if (mode === "apiKey" || mode === "oauth" || mode === "externalCli" || mode === "none") {
         authMode = mode;
       }
-    } catch {
-      // Registry lookup failure must never break flat-rate detection.
+    } catch (err) {
+      // Registry lookup failure must never break flat-rate detection —
+      // fall through with authMode undefined and surface the cause.
+      logWarning(
+        "dispatch",
+        `flat-rate auth-mode lookup failed for ${provider}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   return {
