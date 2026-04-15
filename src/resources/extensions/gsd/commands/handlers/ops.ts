@@ -44,7 +44,7 @@ export async function handleOpsCommand(trimmed: string, ctx: ExtensionCommandCon
     return true;
   }
   if (trimmed === "debug" || trimmed.startsWith("debug ")) {
-    await handleDebug(trimmed.replace(/^debug\s*/, "").trim(), ctx);
+    await handleDebug(trimmed.replace(/^debug\s*/, "").trim(), ctx, pi);
     return true;
   }
   if (trimmed === "forensics" || trimmed.startsWith("forensics ")) {

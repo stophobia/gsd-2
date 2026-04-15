@@ -371,4 +371,212 @@ describe("handleDebug lifecycle", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  test("diagnose-issue dispatches find_root_cause_only goal with slug and issue in payload", async () => {
+    const base = makeBase();
+    const ctx = createMockCtx();
+    const dispatched: Array<{ customType: string; content: string; display: boolean }> = [];
+    const mockPi = {
+      sendMessage(msg: { customType: string; content: string; display: boolean }) {
+        dispatched.push(msg);
+      },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      await handleDebug("--diagnose memory leak in worker pool", ctx as any, mockPi as any);
+      // Session creation notification still fires
+      assert.equal(ctx.notifications[0].level, "info");
+      assert.match(ctx.notifications[0].message, /dispatchMode=find_root_cause_only/);
+
+      // Exactly one dispatch was emitted
+      assert.equal(dispatched.length, 1);
+      const dispatch = dispatched[0];
+      assert.equal(dispatch.customType, "gsd-debug-diagnose");
+      assert.equal(dispatch.display, false);
+      // Goal line must carry root-cause-only value
+      assert.match(dispatch.content, /`find_root_cause_only`/);
+      // do-NOT-fix instruction must be present
+      assert.match(dispatch.content, /do \*\*NOT\*\* apply code changes/);
+      assert.match(dispatch.content, /memory-leak-in-worker-pool/);
+      assert.match(dispatch.content, /memory leak in worker pool/);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnose-issue dispatch never advertises fix-application in payload", async () => {
+    const base = makeBase();
+    const dispatched: Array<{ content: string }> = [];
+    const mockPi = {
+      sendMessage(msg: { customType: string; content: string; display: boolean }) {
+        dispatched.push(msg);
+      },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      await handleDebug("--diagnose flaky checkout flow after payment", createMockCtx() as any, mockPi as any);
+      assert.equal(dispatched.length, 1);
+      // Goal must be root-cause-only and include no-fix instruction
+      assert.match(dispatched[0].content, /`find_root_cause_only`/);
+      assert.match(dispatched[0].content, /do \*\*NOT\*\* apply code changes/);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("continue dispatches find_and_fix goal scoped to the target slug only", async () => {
+    const base = makeBase();
+    const ctx = createMockCtx();
+    const dispatched: Array<{ customType: string; content: string; display: boolean }> = [];
+    const mockPi = {
+      sendMessage(msg: { customType: string; content: string; display: boolean }) {
+        dispatched.push(msg);
+      },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      createDebugSession(base, { issue: "Auth timeout", createdAt: 10, status: "paused", phase: "blocked" });
+      createDebugSession(base, { issue: "Billing webhook", createdAt: 20, status: "paused", phase: "blocked" });
+
+      await handleDebug("continue auth-timeout", ctx as any, mockPi as any);
+      // Notification shows dispatched mode
+      assert.match(ctx.notifications[0].message, /dispatchMode=find_and_fix/);
+
+      // Exactly one dispatch for the targeted slug
+      assert.equal(dispatched.length, 1);
+      const dispatch = dispatched[0];
+      assert.equal(dispatch.customType, "gsd-debug-continue");
+      assert.equal(dispatch.display, false);
+      // Goal line must carry find-and-fix value
+      assert.match(dispatch.content, /`find_and_fix`/);
+      // Session slug is scoped correctly
+      assert.match(dispatch.content, /auth-timeout/);
+      // Must NOT mention the other session slug — no cross-session bleed
+      assert.doesNotMatch(dispatch.content, /billing-webhook/);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("continue dispatch failure surfaces warning without corrupting session state", async () => {
+    const base = makeBase();
+    const ctx = createMockCtx();
+    const mockPi = {
+      sendMessage() {
+        throw new Error("transport unavailable");
+      },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      createDebugSession(base, { issue: "CI flake", createdAt: 10, status: "paused", phase: "blocked" });
+
+      await handleDebug("continue ci-flake", ctx as any, mockPi as any);
+      // Session update notification still fires first
+      assert.match(ctx.notifications[0].message, /Resumed debug session/);
+
+      // Dispatch error notification follows
+      assert.equal(ctx.notifications.length, 2);
+      assert.equal(ctx.notifications[1].level, "warning");
+      assert.match(ctx.notifications[1].message, /Continue dispatch failed/);
+      assert.match(ctx.notifications[1].message, /ci-flake/);
+
+      // Session state was persisted despite dispatch failure
+      const statusCtx = createMockCtx();
+      await handleDebug("status ci-flake", statusCtx as any);
+      assert.match(statusCtx.notifications[0].message, /status=active/);
+      assert.match(statusCtx.notifications[0].message, /phase=continued/);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnose-issue dispatch failure surfaces warning without losing session", async () => {
+    const base = makeBase();
+    const ctx = createMockCtx();
+    const mockPi = {
+      sendMessage() {
+        throw new Error("dispatch error");
+      },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      await handleDebug("--diagnose auth token expiry race condition", ctx as any, mockPi as any);
+      // First notification: session created
+      assert.equal(ctx.notifications[0].level, "info");
+      assert.match(ctx.notifications[0].message, /Diagnose session started/);
+
+      // Second notification: dispatch error
+      assert.equal(ctx.notifications.length, 2);
+      assert.equal(ctx.notifications[1].level, "warning");
+      assert.match(ctx.notifications[1].message, /Diagnose dispatch failed/);
+      assert.match(ctx.notifications[1].message, /auth-token-expiry-race-condition/);
+
+      // Session artifact still exists
+      const statusCtx = createMockCtx();
+      await handleDebug("status auth-token-expiry-race-condition", statusCtx as any);
+      assert.equal(statusCtx.notifications[0].level, "info");
+      assert.match(statusCtx.notifications[0].message, /mode=diagnose/);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("continue with unknown slug emits warning without dispatching", async () => {
+    const base = makeBase();
+    const ctx = createMockCtx();
+    const dispatched: Array<unknown> = [];
+    const mockPi = {
+      sendMessage(msg: unknown) { dispatched.push(msg); },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      await handleDebug("continue no-such-slug", ctx as any, mockPi as any);
+      assert.equal(ctx.notifications[0].level, "warning");
+      assert.match(ctx.notifications[0].message, /Unknown debug session slug/);
+      assert.equal(dispatched.length, 0);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnose-issue with issue text containing reserved command words dispatches correctly", async () => {
+    const base = makeBase();
+    const dispatched: Array<{ content: string }> = [];
+    const mockPi = {
+      sendMessage(msg: { customType: string; content: string; display: boolean }) {
+        dispatched.push(msg);
+      },
+    };
+    const saved = process.cwd();
+    process.chdir(base);
+
+    try {
+      // 'status' and 'continue' are reserved words but in multi-token --diagnose context they become issue text
+      await handleDebug("--diagnose status endpoint continues to return 500", createMockCtx() as any, mockPi as any);
+      assert.equal(dispatched.length, 1);
+      assert.match(dispatched[0].content, /find_root_cause_only/);
+      assert.match(dispatched[0].content, /status-endpoint-continues-to-return-500/);
+    } finally {
+      process.chdir(saved);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });

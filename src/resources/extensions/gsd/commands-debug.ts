@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 
 import {
   assertValidDebugSessionSlug,
@@ -7,6 +7,7 @@ import {
   loadDebugSession,
   updateDebugSession,
 } from "./debug-session-store.js";
+import { loadPrompt } from "./prompt-loader.js";
 
 export type DebugCommandIntent
   = { type: "usage" }
@@ -89,7 +90,7 @@ export function parseDebugCommand(args: string): DebugCommandIntent {
   return { type: "issue-start", issue: raw };
 }
 
-export async function handleDebug(args: string, ctx: ExtensionCommandContext): Promise<void> {
+export async function handleDebug(args: string, ctx: ExtensionCommandContext, pi?: ExtensionAPI): Promise<void> {
   const parsed = parseDebugCommand(args);
   const basePath = process.cwd();
 
@@ -233,15 +234,39 @@ export async function handleDebug(args: string, ctx: ExtensionCommandContext): P
         lastError: null,
       });
 
+      const canDispatch = pi != null && typeof (pi as ExtensionAPI).sendMessage === "function";
+      const dispatchNote = canDispatch ? "\ndispatchMode=find_and_fix" : "";
       ctx.ui.notify(
         [
           `Resumed debug session: ${resumed.session.slug}`,
           formatSessionLine("Session:", resumed.session),
           `Log: ${resumed.session.logPath}`,
           `Next: /gsd debug status ${resumed.session.slug}`,
-        ].join("\n"),
+        ].join("\n") + dispatchNote,
         "info",
       );
+
+      if (canDispatch) {
+        try {
+          const prompt = loadPrompt("debug-diagnose", {
+            goal: "find_and_fix",
+            issue: resumed.session.issue,
+            slug: resumed.session.slug,
+            mode: resumed.session.mode,
+            workingDirectory: basePath,
+          });
+          pi.sendMessage(
+            { customType: "gsd-debug-continue", content: prompt, display: false },
+            { triggerTurn: true },
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(
+            `Continue dispatch failed: ${msg}\nSession '${resumed.session.slug}' is persisted; retry with /gsd debug continue ${resumed.session.slug}`,
+            "warning",
+          );
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(
@@ -273,6 +298,28 @@ export async function handleDebug(args: string, ctx: ExtensionCommandContext): P
         ].join("\n"),
         "info",
       );
+
+      if (pi && typeof pi.sendMessage === "function") {
+        try {
+          const prompt = loadPrompt("debug-diagnose", {
+            goal: "find_root_cause_only",
+            issue: s.issue,
+            slug: s.slug,
+            mode: s.mode,
+            workingDirectory: basePath,
+          });
+          pi.sendMessage(
+            { customType: "gsd-debug-diagnose", content: prompt, display: false },
+            { triggerTurn: true },
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(
+            `Diagnose dispatch failed: ${msg}\nSession '${s.slug}' is persisted; continue manually with /gsd debug continue ${s.slug}`,
+            "warning",
+          );
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(
