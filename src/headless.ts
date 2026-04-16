@@ -89,8 +89,6 @@ interface TrackedEvent {
   detail?: string
 }
 
-type RpcClientWithProcess = RpcClient & { process?: ChildProcess }
-
 // ---------------------------------------------------------------------------
 // Resume Session Resolution
 // ---------------------------------------------------------------------------
@@ -820,9 +818,9 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   }
 
   // Detect child process crash (read-only exit event subscription — not stdin access)
-  const internalProcess = (client as RpcClientWithProcess).process
+  const internalProcess = Reflect.get(client as object, 'process') as ChildProcess | undefined
   if (internalProcess) {
-    internalProcess.on('exit', (code) => {
+    internalProcess.on('exit', (code: number | null) => {
       if (!completed) {
         const msg = `[headless] Child process exited unexpectedly with code ${code ?? 'null'}\n`
         process.stderr.write(msg)
