@@ -45,6 +45,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessagesWithReport } from "./transform-messages.js";
 
+/** Stream options specific to the Amazon Bedrock converse-stream provider, including region, reasoning, and caching knobs. */
 export interface BedrockOptions extends StreamOptions {
 	region?: string;
 	profile?: string;
