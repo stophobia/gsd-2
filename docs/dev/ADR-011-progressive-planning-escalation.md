@@ -58,7 +58,7 @@ Replace all-or-nothing milestone planning with two-tier slice specification:
 
 **New node kind in the Execution Plane DAG:**
 
-```
+```yaml
 refine — converts a sketch into a full plan using current codebase state
   inputs: sketch (from roadmap), prior slice summary, current codebase
   outputs: PLAN.md, T##-PLAN.md files
@@ -75,6 +75,11 @@ A new `refining` phase triggers when:
 
 This fits naturally into ADR-009's scheduler model — `refine` is a typed node with explicit inputs, outputs, and gate requirements.
 
+**Type system changes required:**
+- Extend `UokNodeKind` type in `contracts.ts` to include `"refine"`
+- Update scheduler dispatch logic to handle the new node kind
+- Add validation for `refine` nodes in DAG construction
+
 ### Change 2: Mid-Execution Escalation
 
 **Extends:** Gate Plane (`manual-attention` outcome), Execution Plane (pause/resume semantics)
@@ -85,6 +90,8 @@ Add a third option between "guess" and "blocker" for task executors:
 
 ```json
 {
+  "escalationId": "ESC-M001-S02-T03-001",
+  "timestamp": "2026-04-17T14:32:00Z",
   "taskId": "T03",
   "sliceId": "S02",
   "milestoneId": "M001",
@@ -119,7 +126,10 @@ Escalation maps to the `manual-attention` gate outcome:
 7. The decision is recorded via `gsd_decision_save` with source: `"escalation"`
 
 **`continueWithDefault` semantics:**
-- `true`: The executor continues with its recommended option. If the user later chooses differently, the next task receives a correction in carry-forward: "ESCALATION OVERRIDE: User chose [X] instead of executor's [Y]."
+- `true`: The executor continues with its recommended option. If the user later chooses differently:
+  - If the current task (e.g., T03) is still in progress, inject "ESCALATION OVERRIDE: User chose [X] instead of executor's [Y]" into the current task's carry-forward
+  - If the current task has completed, attach the override to the next pending task in the same slice (e.g., T04)
+  - If no tasks remain in the slice, attach to the next scheduled task in the execution plane
 - `false`: The scheduler pauses the execution plane. No work proceeds until the user responds.
 
 **Integration with ADR-009's Audit Plane:**
@@ -150,6 +160,24 @@ Every escalation is recorded in the audit ledger:
 ### Risk 5: Interaction with ADR-003 (pipeline simplification)
 
 **Mitigation:** ADR-003 proposes merging research into planning. Progressive planning is compatible — the merged plan-milestone session produces S01 in detail and S02+ as sketches. The `refine` node runs the same planning prompt with better context. Escalation is orthogonal — it adds a pause mechanism alongside the existing blocker mechanism.
+
+### Risk 6: Concurrent escalations across parallel tasks
+
+If tasks in different slices or team-worker nodes escalate simultaneously, multiple escalations compete for user attention.
+
+**Mitigation:** The notification panel queues escalations in arrival order. Each escalation is independent — the user resolves them sequentially. The scheduler pauses only the specific execution branch that escalated, not the entire execution plane. Parallel branches without escalations continue unaffected.
+
+### Risk 7: Escalation artifact persistence failures
+
+If the executor crashes after deciding to escalate but before writing `T##-ESCALATION.json`, the task appears to fail without explanation.
+
+**Mitigation:** Escalation writes use atomic file operations (write to temp, rename). If the artifact is missing after a task failure, the recovery system treats it as a standard task failure with retry. The executor's intent to escalate is also logged in the audit ledger before the file write, providing a recovery signal.
+
+### Risk 8: Race conditions with continueWithDefault: true
+
+If the executor completes the task before the user responds, and the user then chooses differently, the completed task's output may be based on the wrong decision.
+
+**Mitigation:** The correction propagates forward only — completed tasks are not reverted. The override is injected into the next task's carry-forward, which adjusts course going forward. For decisions where retroactive correction is unacceptable, the executor should set `continueWithDefault: false`. The preference `escalation_default_pause: true` can enforce this globally.
 
 ## Alternatives Considered
 
@@ -183,30 +211,36 @@ Only plan S01 during plan-milestone. Don't plan S02–S04 at all until S01 compl
 
 1. Add sketch format to `plan-milestone.md` template: full decomposition for S01, sketch format for S02+
 2. Add sketch detection to state derivation (roadmap entry exists, no PLAN.md)
-3. Add `refine` node kind to the Execution Plane DAG
-4. Add `buildRefineSlicePrompt()` to prompt builders — inlines prior slice summary + findings + sketch
-5. Add `refine-slice.md` prompt template
-6. Add plan-gate validation for refined plans (same as plan-slice)
-7. Tests: sketch detection, refine dispatch, plan quality from sketch + prior summary
+3. Extend `UokNodeKind` type in `contracts.ts` to include `"refine"`
+4. Update scheduler dispatch logic to handle refine node kind
+5. Add `refine` node kind to the Execution Plane DAG
+6. Add `buildRefineSlicePrompt()` to prompt builders — inlines prior slice summary + findings + sketch
+7. Add `refine-slice.md` prompt template
+8. Add plan-gate validation for refined plans (same as plan-slice)
+9. Tests: sketch detection, refine dispatch, plan quality from sketch + prior summary
 
 ### Phase 2: Mid-Execution Escalation
 
-8. Add `T##-ESCALATION.json` schema to types
-9. Update `execute-task.md` with escalation instructions (between "guess" and "blocker")
-10. Map escalation to Gate Plane `manual-attention` outcome
-11. Add escalation detection to post-unit processing
-12. Add escalation display to notification panel with interactive options
-13. Wire user response into carry-forward context for resumed/next task
-14. Record escalation decisions via `gsd_decision_save` with source: `"escalation"`
-15. Add escalation events to Audit Plane ledger
-16. Tests: escalation pause, user response injection, `continueWithDefault` behavior, audit trail
+10. Add `T##-ESCALATION.json` schema to types
+11. Update `execute-task.md` with escalation instructions (between "guess" and "blocker")
+12. Map escalation to Gate Plane `manual-attention` outcome
+13. Add escalation detection to post-unit processing
+14. Add escalation display to notification panel with interactive options
+15. Wire user response into carry-forward context for resumed/next task
+16. Record escalation decisions via `gsd_decision_save` with source: `"escalation"`
+17. Add escalation events to Audit Plane ledger
+18. Tests: escalation pause, user response injection, `continueWithDefault` behavior, audit trail
 
 ### Phase 3: Integration Testing
 
-17. End-to-end: milestone with 3 slices, S01 ships with findings, verify `refine-slice` for S02 incorporates findings
-18. End-to-end: executor writes ESCALATION.json, verify scheduler pauses, user responds, execution resumes
-19. Verify escalation + blocker in same task (blocker takes priority)
-20. Verify interaction with ADR-009 control plane contracts
+19. End-to-end: milestone with 3 slices, S01 ships with findings, verify `refine-slice` for S02 incorporates findings
+20. End-to-end: executor writes ESCALATION.json, verify scheduler pauses, user responds, execution resumes
+21. Verify escalation + blocker in same task (blocker takes priority)
+22. Verify interaction with ADR-009 control plane contracts
+23. Concurrent escalations from parallel tasks — verify notification panel queues correctly and only the escalating branch pauses
+24. Escalation timeout with `continueWithDefault: true` — verify late user response injects override into correct downstream task
+25. Escalation artifact write failure and recovery — verify atomic write, audit log fallback, and retry behavior
+26. Refine node latency — measure slice start delay from refine dispatch vs direct plan-slice
 
 ## Open Questions
 
