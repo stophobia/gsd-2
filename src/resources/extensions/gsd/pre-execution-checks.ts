@@ -254,6 +254,8 @@ export function normalizeFilePath(filePath: string): string {
   } else if (normalized.startsWith("~/")) {
     normalized = resolve(homedir(), normalized.slice(2));
   }
+  // homedir()/resolve() can emit platform separators (e.g. "\" on Windows).
+  normalized = normalized.replace(/\\/g, "/");
 
   // Remove leading ./
   while (normalized.startsWith("./")) {
