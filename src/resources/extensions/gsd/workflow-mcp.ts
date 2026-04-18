@@ -30,6 +30,7 @@ const MCP_WORKFLOW_TOOL_SURFACE = new Set([
   "gsd_journal_query",
   "gsd_milestone_complete",
   "gsd_milestone_generate_id",
+  "gsd_checkpoint_db",
   "gsd_milestone_status",
   "gsd_milestone_validate",
   "gsd_plan_task",

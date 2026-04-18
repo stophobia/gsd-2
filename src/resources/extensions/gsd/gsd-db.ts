@@ -1089,6 +1089,14 @@ export function vacuumDatabase(): void {
   } catch (e) { logWarning("db", `VACUUM failed: ${(e as Error).message}`); }
 }
 
+/** Flush WAL into gsd.db so `git add .gsd/gsd.db` stages current state — safe while DB is open. */
+export function checkpointDatabase(): void {
+  if (!currentDb) return;
+  try {
+    currentDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  } catch (e) { logWarning("db", `WAL checkpoint failed: ${(e as Error).message}`); }
+}
+
 let _txDepth = 0;
 
 export function transaction<T>(fn: () => T): T {

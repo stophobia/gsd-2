@@ -23,6 +23,7 @@ import {
   insertTask,
   getTask,
   getSliceTasks,
+  checkpointDatabase,
 } from '../gsd-db.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -516,6 +517,48 @@ describe('gsd-db', () => {
     assert.deepStrictEqual(sliceTasks[0]!.files, task!.files);
 
     closeDatabase();
+  });
+
+  // ─── checkpointDatabase ────────────────────────────────────────────────────
+
+  describe('checkpointDatabase', () => {
+    test('checkpointDatabase: flushes WAL into base file (TRUNCATE)', (t) => {
+      const dbPath = tempDbPath();
+      t.after(() => cleanup(dbPath));
+
+      openDatabase(dbPath);
+
+      // Write enough data to ensure WAL has content
+      transaction(() => {
+        insertDecision({
+          id: 'D001',
+          when_context: 'test',
+          scope: 'global',
+          decision: 'WAL flush test',
+          choice: 'checkpoint',
+          rationale: 'WAL checkpoint regression test — #4418',
+          revisable: 'yes',
+          made_by: 'agent',
+          superseded_by: null,
+        });
+      });
+
+      const walPath = dbPath + '-wal';
+      assert.ok(fs.existsSync(walPath), 'WAL file should exist after write');
+      const walSizeBefore = fs.statSync(walPath).size;
+      assert.ok(walSizeBefore > 0, 'WAL file should be non-empty after write');
+
+      checkpointDatabase();
+
+      const walSizeAfter = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
+      assert.equal(walSizeAfter, 0, 'WAL file should be truncated to 0 after checkpoint');
+    });
+
+    test('checkpointDatabase: is a no-op when no database is open', () => {
+      closeDatabase();
+      // Must not throw
+      assert.doesNotThrow(() => checkpointDatabase());
+    });
   });
 
   // ─── Final Report ──────────────────────────────────────────────────────────
