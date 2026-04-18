@@ -341,11 +341,17 @@ export async function handleCompleteTask(
 
   // ── ADR-011 Phase 2: write escalation artifact (opt-in) ────────────────
   // Validation already happened BEFORE side effects — this block only
-  // performs the disk write for a pre-validated artifact. Only transient
-  // filesystem errors can fail here. For continueWithDefault=false we still
-  // surface the error; the side effects already landed (task complete +
-  // SUMMARY.md + gates closed), so the caller sees inconsistent state and
-  // must run /gsd recover or manually re-escalate.
+  // performs the disk write for a pre-validated artifact. For
+  // continueWithDefault=false, a write failure here would otherwise leave
+  // the task marked complete with SUMMARY.md + closed gates but no
+  // escalation, which silently advances the loop past a pause the user
+  // asked for. We compensate by reverting the DB-level completion: set
+  // status back to 'pending' and delete the verification_evidence rows
+  // (same shape as the disk-render-failure rollback above). SUMMARY.md
+  // on disk is left in place because the next complete-task retry will
+  // overwrite it; gate rows are UPSERT-keyed per task and will also be
+  // overwritten. This restores the invariant that deriveState() sees a
+  // consistent "task not done" view so the loop re-dispatches the task.
   if (validatedEscalationArtifact) {
     try {
       writeEscalationArtifact(basePath, validatedEscalationArtifact);
@@ -353,6 +359,23 @@ export async function handleCompleteTask(
       const msg = `complete-task escalation write failed for ${params.milestoneId}/${params.sliceId}/${params.taskId}: ${(escalationErr as Error).message}`;
       logWarning("tool", msg);
       if (validatedEscalationArtifact.continueWithDefault === false) {
+        // Compensating rollback: revert DB completion so the loop pauses on
+        // re-dispatch instead of silently advancing. Mirror the existing
+        // renderErr rollback (line ~261).
+        try {
+          deleteVerificationEvidence(params.milestoneId, params.sliceId, params.taskId);
+          updateTaskStatus(params.milestoneId, params.sliceId, params.taskId, 'pending');
+          invalidateStateCache();
+          logWarning(
+            "tool",
+            `complete-task rolled back DB completion for ${params.milestoneId}/${params.sliceId}/${params.taskId} after escalation write failure; SUMMARY.md left on disk for retry.`,
+          );
+        } catch (rollbackErr) {
+          logWarning(
+            "tool",
+            `complete-task rollback failed after escalation write failure for ${params.milestoneId}/${params.sliceId}/${params.taskId}: ${(rollbackErr as Error).message}`,
+          );
+        }
         return { error: msg };
       }
     }
