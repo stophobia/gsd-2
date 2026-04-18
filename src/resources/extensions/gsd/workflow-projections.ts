@@ -19,6 +19,7 @@ import { logWarning } from "./workflow-logger.js";
 import { isClosedStatus } from "./status-guards.js";
 import { deriveState } from "./state.js";
 import type { GSDState } from "./types.js";
+import { renderRoadmapFromDb } from "./markdown-renderer.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -375,11 +376,13 @@ export async function renderStateProjection(basePath: string): Promise<void> {
  * All calls are wrapped in try/catch — projection failure is non-fatal per D-02.
  */
 export async function renderAllProjections(basePath: string, milestoneId: string): Promise<void> {
-  // Render ROADMAP.md for the milestone
+  // Delegate to the authoritative roadmap renderer — the reduced
+  // renderRoadmapProjection omits sections like ## Boundary Map and would
+  // clobber the output written by plan-milestone / reassess-roadmap.
   try {
-    renderRoadmapProjection(basePath, milestoneId);
+    await renderRoadmapFromDb(basePath, milestoneId);
   } catch (err) {
-    logWarning("projection", `renderRoadmapProjection failed for ${milestoneId}: ${(err as Error).message}`);
+    logWarning("projection", `renderRoadmapFromDb failed for ${milestoneId}: ${(err as Error).message}`);
   }
 
   // Query all slices for this milestone
@@ -473,8 +476,13 @@ export function regenerateIfMissing(
         renderPlanProjection(basePath, milestoneId, sliceId);
         break;
       case "ROADMAP":
-        renderRoadmapProjection(basePath, milestoneId);
-        break;
+        // Authoritative renderer keeps all sections the reduced projection
+        // would strip. Async fire-and-forget like STATE: file appears on
+        // the next post-mutation cycle.
+        void renderRoadmapFromDb(basePath, milestoneId).catch((err) => {
+          logWarning("projection", `regenerateIfMissing ROADMAP failed: ${(err as Error).message}`);
+        });
+        return false;
       case "STATE":
         // renderStateProjection is async — fire-and-forget.
         // Return false since the file isn't written yet; it will appear
