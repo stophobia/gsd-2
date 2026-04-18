@@ -26,25 +26,67 @@ describe("normalizePythonCommand", () => {
     assert.equal(normalizePythonCommand(cmd), cmd);
   });
 
-  test("returns a string for python3 command on this system", () => {
-    // After normalization the result must still be a valid shell command string.
-    const result = normalizePythonCommand("python3 -m pytest");
-    assert.equal(typeof result, "string");
-    assert.ok(result.length > 0);
-    // After rewrite the string must still contain the original arguments.
+  test("rewrites leading python3 token when interpreter is detected", () => {
+    const input = "python3 -m pytest";
+    const result = normalizePythonCommand(input);
+    const detected = detectPythonExecutable();
+    if (detected === null) {
+      assert.equal(result, input, "expected passthrough when no interpreter is detected");
+      return;
+    }
+    assert.ok(
+      result.startsWith(`${detected} `),
+      `Expected rewritten prefix '${detected} ' in: ${result}`,
+    );
     assert.ok(result.includes("-m pytest"), `Expected arguments preserved in: ${result}`);
   });
 
-  test("returns a string for python command on this system", () => {
-    const result = normalizePythonCommand("python manage.py migrate");
-    assert.equal(typeof result, "string");
+  test("rewrites leading python token when interpreter is detected", () => {
+    const input = "python manage.py migrate";
+    const result = normalizePythonCommand(input);
+    const detected = detectPythonExecutable();
+    if (detected === null) {
+      assert.equal(result, input, "expected passthrough when no interpreter is detected");
+      return;
+    }
+    assert.ok(
+      result.startsWith(`${detected} `),
+      `Expected rewritten prefix '${detected} ' in: ${result}`,
+    );
     assert.ok(result.includes("manage.py migrate"), `Expected arguments preserved in: ${result}`);
   });
 
-  test("preserves arguments after compound && chain", () => {
-    const result = normalizePythonCommand("echo ok && python3 -m pytest --tb=short");
-    assert.equal(typeof result, "string");
-    assert.ok(result.includes("-m pytest --tb=short"), `Expected arguments preserved in: ${result}`);
+  test("rewrites python token after && compound separator", () => {
+    const input = "echo ok && python3 -m pytest --tb=short";
+    const result = normalizePythonCommand(input);
+    const detected = detectPythonExecutable();
+    if (detected === null) {
+      assert.equal(result, input, "expected passthrough when no interpreter is detected");
+      return;
+    }
+    assert.ok(
+      result.includes(`&& ${detected} `),
+      `Expected '&& ${detected} ' segment in: ${result}`,
+    );
+    assert.ok(
+      result.includes("-m pytest --tb=short"),
+      `Expected arguments preserved in: ${result}`,
+    );
+  });
+
+  test("does not duplicate '-3' when rewriting existing 'py -3' token", () => {
+    const input = "py -3 -m pytest";
+    const result = normalizePythonCommand(input);
+    const detected = detectPythonExecutable();
+    if (detected === null) {
+      assert.equal(result, input, "expected passthrough when no interpreter is detected");
+      return;
+    }
+    assert.equal(
+      result,
+      `${detected} -m pytest`,
+      `Expected clean rewrite without duplicated '-3' in: ${result}`,
+    );
   });
 });
 
