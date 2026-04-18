@@ -26,24 +26,51 @@ import { projectRoot } from "./commands/context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * Resolved paths for the four artefact files that feed a milestone-scoped
+ * learnings extraction. Paths are absolute when the file exists; `null`
+ * otherwise. `missingRequired` lists the filenames (not full paths) of the
+ * required artefacts that could not be found.
+ */
 export interface PhaseArtifacts {
-  plan: string | null;
+  /** Absolute path to `{MID}-ROADMAP.md`, or `null` if the file is missing. */
+  roadmap: string | null;
+  /** Absolute path to `{MID}-SUMMARY.md`, or `null` if the file is missing. */
   summary: string | null;
+  /** Absolute path to `{MID}-VERIFICATION.md` (optional), or `null`. */
   verification: string | null;
+  /** Absolute path to `{MID}-UAT.md` (optional), or `null`. */
   uat: string | null;
+  /** Filenames of required artefacts that could not be resolved. */
   missingRequired: string[];
 }
 
+/**
+ * Full context required by `buildExtractLearningsPrompt` to construct the
+ * manual `/gsd extract-learnings` dispatch prompt. Covers the milestone
+ * identity, the output target, the inlined artefact contents, and any
+ * missing optional artefacts that should be surfaced to the agent.
+ */
 export interface ExtractLearningsPromptContext {
+  /** Milestone identifier, e.g. `"M001"` or `"M001-ush8s3"` (team mode). */
   milestoneId: string;
+  /** Human-readable milestone title, taken from the roadmap H1 when present. */
   milestoneName: string;
+  /** Absolute filesystem path at which the LEARNINGS.md file will be written. */
   outputPath: string;
+  /** Project-root-relative path for the same file, used in prompt prose. */
   relativeOutputPath: string;
-  planContent: string;
+  /** Inlined contents of `{MID}-ROADMAP.md` (required). */
+  roadmapContent: string;
+  /** Inlined contents of `{MID}-SUMMARY.md` (required). */
   summaryContent: string;
+  /** Inlined contents of `{MID}-VERIFICATION.md` when the file exists, else `null`. */
   verificationContent: string | null;
+  /** Inlined contents of `{MID}-UAT.md` when the file exists, else `null`. */
   uatContent: string | null;
+  /** Filenames of optional artefacts that were not available for inlining. */
   missingArtifacts: string[];
+  /** Display name of the enclosing project (from `.gsd/PROJECT.md` or dir basename). */
   projectName: string;
 }
 
@@ -65,53 +92,85 @@ export interface ExtractionStepsContext {
   relativeOutputPath: string;
 }
 
+/**
+ * Shape of the YAML frontmatter written at the top of `{MID}-LEARNINGS.md`.
+ *
+ * Produced by `buildFrontmatter` — consumed only by the human-readable audit
+ * trail, not by any downstream automated pipeline. The `counts` object and
+ * `missing_artifacts` list exist so reviewers can spot truncated extractions
+ * at a glance.
+ */
 export interface FrontmatterContext {
+  /** Milestone identifier (becomes the `phase` key). */
   milestoneId: string;
+  /** Milestone title (becomes the `phase_name` key). */
   milestoneName: string;
+  /** Project display name. */
   projectName: string;
+  /** ISO-8601 UTC timestamp of when the extraction was performed. */
   generatedAt: string;
+  /** Counts of extracted items per category. */
   counts: {
     decisions: number;
     lessons: number;
     patterns: number;
     surprises: number;
   };
+  /** Filenames of optional artefacts that were not available during extraction. */
   missingArtifacts: string[];
 }
 
 // ─── Pure functions ───────────────────────────────────────────────────────────
 
+/**
+ * Parses the argument string passed to `/gsd extract-learnings`.
+ *
+ * Returns `{ milestoneId: null }` for empty / whitespace-only input — the
+ * handler surfaces a usage hint in that case. A non-empty trimmed value is
+ * returned as-is; the handler validates that the milestone actually exists.
+ */
 export function parseExtractLearningsArgs(args: string): { milestoneId: string | null } {
   const trimmed = args.trim();
   return { milestoneId: trimmed || null };
 }
 
+/**
+ * Builds the absolute path at which the LEARNINGS.md audit trail should be
+ * written for the given milestone.
+ */
 export function buildLearningsOutputPath(milestoneDir: string, milestoneId: string): string {
   return join(milestoneDir, `${milestoneId}-LEARNINGS.md`);
 }
 
+/**
+ * Resolves the milestone-scoped artefact paths needed to perform an
+ * extraction. The milestone's ROADMAP and SUMMARY files are required; the
+ * VERIFICATION and UAT files are optional. Missing required files are
+ * reported by filename in `missingRequired` so the handler can surface a
+ * precise error without swallowing the cause.
+ */
 export function resolvePhaseArtifacts(milestoneDir: string, milestoneId: string): PhaseArtifacts {
   const missingRequired: string[] = [];
 
-  const planFile = `${milestoneId}-ROADMAP.md`;
+  const roadmapFile = `${milestoneId}-ROADMAP.md`;
   const summaryFile = `${milestoneId}-SUMMARY.md`;
   const verificationFile = `${milestoneId}-VERIFICATION.md`;
   const uatFile = `${milestoneId}-UAT.md`;
 
-  const planPath = join(milestoneDir, planFile);
+  const roadmapPath = join(milestoneDir, roadmapFile);
   const summaryPath = join(milestoneDir, summaryFile);
   const verificationPath = join(milestoneDir, verificationFile);
   const uatPath = join(milestoneDir, uatFile);
 
-  const plan = existsSync(planPath) ? planPath : null;
+  const roadmap = existsSync(roadmapPath) ? roadmapPath : null;
   const summary = existsSync(summaryPath) ? summaryPath : null;
   const verification = existsSync(verificationPath) ? verificationPath : null;
   const uat = existsSync(uatPath) ? uatPath : null;
 
-  if (!plan) missingRequired.push(planFile);
+  if (!roadmap) missingRequired.push(roadmapFile);
   if (!summary) missingRequired.push(summaryFile);
 
-  return { plan, summary, verification, uat, missingRequired };
+  return { roadmap, summary, verification, uat, missingRequired };
 }
 
 /**
@@ -310,7 +369,7 @@ database so future milestone dispatches benefit from what was learned here.
 
 ### Roadmap
 
-${ctx.planContent}
+${ctx.roadmapContent}
 
 ---
 
@@ -324,6 +383,14 @@ ${stepsBlock}
 `;
 }
 
+/**
+ * Serialises the YAML frontmatter block prepended to `{MID}-LEARNINGS.md`.
+ *
+ * The output begins and ends with a `---` fence so it can be concatenated
+ * directly with the body. Empty `missingArtifacts` is rendered as an
+ * inline empty list (`missing_artifacts: []`) to keep the frontmatter valid
+ * YAML in every case.
+ */
 export function buildFrontmatter(ctx: FrontmatterContext): string {
   const missingList = ctx.missingArtifacts.length > 0
     ? ctx.missingArtifacts.map((a) => `  - ${a}`).join("\n")
@@ -347,6 +414,14 @@ missing_artifacts:${missingValue}
 ---`;
 }
 
+/**
+ * Extracts the project display name from `.gsd/PROJECT.md` frontmatter.
+ *
+ * Falls back to the project directory's basename if PROJECT.md is missing,
+ * unreadable, or has no `name:` field. Never throws — surfacing the raw
+ * directory name is preferable to crashing an extraction over a display
+ * string.
+ */
 export function extractProjectName(basePath: string): string {
   const projectMdPath = join(gsdRoot(basePath), "PROJECT.md");
 
@@ -365,6 +440,15 @@ export function extractProjectName(basePath: string): string {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
+/**
+ * Handles the `/gsd extract-learnings <MID>` slash command.
+ *
+ * Resolves and reads the milestone artefacts, constructs the dispatch prompt
+ * via {@link buildExtractLearningsPrompt}, and triggers a new LLM turn via
+ * `pi.sendMessage({ triggerTurn: true })`. Returns quickly with a UI
+ * notification (not an error) when the milestone cannot be found or required
+ * artefacts are missing, matching the behaviour of sibling `/gsd` commands.
+ */
 export async function handleExtractLearnings(
   args: string,
   ctx: ExtensionCommandContext,
@@ -396,7 +480,7 @@ export async function handleExtractLearnings(
     return;
   }
 
-  const planContent = readFileSync(artifacts.plan!, "utf-8");
+  const roadmapContent = readFileSync(artifacts.roadmap!, "utf-8");
   const summaryContent = readFileSync(artifacts.summary!, "utf-8");
 
   const verificationContent = artifacts.verification
@@ -410,7 +494,7 @@ export async function handleExtractLearnings(
   if (!artifacts.verification) missingArtifacts.push(`${milestoneId}-VERIFICATION.md`);
   if (!artifacts.uat) missingArtifacts.push(`${milestoneId}-UAT.md`);
 
-  const h1Match = planContent.match(/^#\s+(.+)$/m);
+  const h1Match = roadmapContent.match(/^#\s+(.+)$/m);
   const milestoneName = h1Match?.[1]?.trim() ?? milestoneId;
 
   const projectName = extractProjectName(basePath);
@@ -422,7 +506,7 @@ export async function handleExtractLearnings(
     milestoneName,
     outputPath,
     relativeOutputPath,
-    planContent,
+    roadmapContent,
     summaryContent,
     verificationContent,
     uatContent,

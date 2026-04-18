@@ -75,7 +75,7 @@ describe("resolvePhaseArtifacts", () => {
     writeFileSync(join(tmpBase, "M001-SUMMARY.md"), "# M001 Summary content", "utf-8");
 
     const result = resolvePhaseArtifacts(tmpBase, "M001");
-    assert.equal(result.plan, join(tmpBase, "M001-ROADMAP.md"));
+    assert.equal(result.roadmap, join(tmpBase, "M001-ROADMAP.md"));
     assert.equal(result.summary, join(tmpBase, "M001-SUMMARY.md"));
     assert.deepEqual(result.missingRequired, []);
   });
@@ -85,7 +85,7 @@ describe("resolvePhaseArtifacts", () => {
 
     const result = resolvePhaseArtifacts(tmpBase, "M001");
     assert.ok(result.missingRequired.includes("M001-ROADMAP.md"));
-    assert.equal(result.plan, null);
+    assert.equal(result.roadmap, null);
   });
 
   it("does NOT require M001-PLAN.md (regression for #4429 — milestones use ROADMAP)", () => {
@@ -160,7 +160,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/project/.gsd/milestones/M001/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan content",
+      roadmapContent: "# Roadmap content",
       summaryContent: "# Summary content",
       verificationContent: null,
       uatContent: null,
@@ -178,7 +178,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: null,
       uatContent: null,
@@ -192,13 +192,13 @@ describe("buildExtractLearningsPrompt", () => {
     assert.ok(result.includes("Surprises"));
   });
 
-  it("includes plan and summary content", () => {
+  it("includes roadmap and summary content", () => {
     const result = buildExtractLearningsPrompt({
       milestoneId: "M001",
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "PLAN_CONTENT_UNIQUE_123",
+      roadmapContent: "ROADMAP_CONTENT_UNIQUE_123",
       summaryContent: "SUMMARY_CONTENT_UNIQUE_456",
       verificationContent: null,
       uatContent: null,
@@ -206,7 +206,7 @@ describe("buildExtractLearningsPrompt", () => {
       projectName: "MyProject",
     });
 
-    assert.ok(result.includes("PLAN_CONTENT_UNIQUE_123"));
+    assert.ok(result.includes("ROADMAP_CONTENT_UNIQUE_123"));
     assert.ok(result.includes("SUMMARY_CONTENT_UNIQUE_456"));
   });
 
@@ -216,7 +216,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: "VERIFICATION_UNIQUE_789",
       uatContent: "UAT_UNIQUE_012",
@@ -234,7 +234,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: null,
       uatContent: null,
@@ -251,7 +251,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: null,
       uatContent: null,
@@ -271,7 +271,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: null,
       uatContent: null,
@@ -291,7 +291,7 @@ describe("buildExtractLearningsPrompt", () => {
       milestoneName: "Test Milestone",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: null,
       uatContent: null,
@@ -561,7 +561,7 @@ describe("buildExtractLearningsPrompt composes the steps block", () => {
     const prompt = buildExtractLearningsPrompt({
       ...shared,
       milestoneName: "Composition",
-      planContent: "# Roadmap body",
+      roadmapContent: "# Roadmap body",
       summaryContent: "# Summary body",
       verificationContent: null,
       uatContent: null,
@@ -578,7 +578,7 @@ describe("buildExtractLearningsPrompt composes the steps block", () => {
       milestoneName: "Test",
       outputPath: "/out/M001-LEARNINGS.md",
       relativeOutputPath: ".gsd/milestones/M001/M001-LEARNINGS.md",
-      planContent: "# Plan",
+      roadmapContent: "# Roadmap",
       summaryContent: "# Summary",
       verificationContent: null,
       uatContent: null,
