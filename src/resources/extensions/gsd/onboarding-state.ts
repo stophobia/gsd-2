@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { logWarning } from "./workflow-logger.js"
 
 /**
  * Bump `FLOW_VERSION` whenever a new required step is added to ONBOARDING_STEPS.
@@ -87,10 +88,10 @@ export function writeOnboardingRecord(patch: Partial<OnboardingRecord>): Onboard
   } catch (err) {
     // Non-fatal for the wizard, but make the failure diagnosable. The next boot
     // will re-prompt for onboarding because the record didn't persist; the
-    // stderr message tells the user why.
-    process.stderr.write(
-      `[gsd] Failed to persist onboarding record (${FILE}): ${err instanceof Error ? err.message : String(err)}\n`,
-    )
+    // logWarning entry tells the user why.
+    logWarning("state", `Failed to persist onboarding record: ${err instanceof Error ? err.message : String(err)}`, {
+      file: FILE,
+    })
   }
   return next
 }
