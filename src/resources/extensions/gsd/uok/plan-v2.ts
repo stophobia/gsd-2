@@ -38,6 +38,29 @@ function hasFileContent(path: string | null): boolean {
   }
 }
 
+function getArtifactLookupBases(basePath: string): string[] {
+  const bases = [basePath];
+  const projectRoot = process.env.GSD_PROJECT_ROOT;
+  if (projectRoot && projectRoot.trim().length > 0 && projectRoot !== basePath) {
+    bases.push(projectRoot);
+  }
+  return bases;
+}
+
+function hasMilestoneFileContent(
+  basePath: string,
+  milestoneId: string,
+  suffix: string,
+): boolean {
+  const bases = getArtifactLookupBases(basePath);
+  for (const candidateBase of bases) {
+    if (hasFileContent(resolveMilestoneFile(candidateBase, milestoneId, suffix))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function countSliceResearchArtifacts(basePath: string, milestoneId: string, slices: SliceRow[]): number {
   let count = 0;
   for (const slice of slices) {
@@ -60,9 +83,9 @@ export function compileUnitGraphFromState(basePath: string, state: GSDState): Pl
   const slices = getMilestoneSlices(mid).sort((a, b) => Number(a.sequence ?? 0) - Number(b.sequence ?? 0));
   const nodes: UokGraphNode[] = [];
   const clarifyRoundLimit = PLAN_V2_CLARIFY_ROUND_LIMIT;
-  const draftContextIncluded = hasFileContent(resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT"));
-  const finalizedContextIncluded = hasFileContent(resolveMilestoneFile(basePath, mid, "CONTEXT"));
-  const researchSynthesized = hasFileContent(resolveMilestoneFile(basePath, mid, "RESEARCH"))
+  const draftContextIncluded = hasMilestoneFileContent(basePath, mid, "CONTEXT-DRAFT");
+  const finalizedContextIncluded = hasMilestoneFileContent(basePath, mid, "CONTEXT");
+  const researchSynthesized = hasMilestoneFileContent(basePath, mid, "RESEARCH")
     || countSliceResearchArtifacts(basePath, mid, slices) > 0;
 
   if (isExecutionEntryPhase(state.phase) && !finalizedContextIncluded) {

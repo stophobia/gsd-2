@@ -109,6 +109,29 @@ test("plan-v2 gate fails closed for execution phase when finalized context is mi
   assert.match(compiled.reason ?? "", /CONTEXT\.md/i);
 });
 
+test("plan-v2 gate accepts finalized context from project-root fallback", () => {
+  const projectRoot = createBasePath();
+  const worktreeBase = createBasePath();
+  seedGraphRows();
+
+  writeMilestoneFile(projectRoot, "CONTEXT", "Finalized context in project root.");
+  writeMilestoneFile(worktreeBase, "CONTEXT-DRAFT", "Draft context in worktree.");
+
+  const prevProjectRoot = process.env.GSD_PROJECT_ROOT;
+  process.env.GSD_PROJECT_ROOT = projectRoot;
+  try {
+    const compiled = ensurePlanV2Graph(worktreeBase, buildState("executing"));
+    assert.equal(compiled.ok, true);
+    assert.equal(compiled.finalizedContextIncluded, true);
+  } finally {
+    if (prevProjectRoot === undefined) {
+      delete process.env.GSD_PROJECT_ROOT;
+    } else {
+      process.env.GSD_PROJECT_ROOT = prevProjectRoot;
+    }
+  }
+});
+
 test("plan-v2 compiler writes pipeline metadata for clarify/research/draft stages", () => {
   const basePath = createBasePath();
   seedGraphRows();

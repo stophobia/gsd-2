@@ -128,7 +128,7 @@ import {
 import { setLogBasePath, logWarning, logError } from "./workflow-logger.js";
 import { preflightCleanRoot, postflightPopStash } from "./clean-root-preflight.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { atomicWriteSync } from "./atomic-write.js";
@@ -308,6 +308,21 @@ function restoreMilestoneLockEnv(): void {
   s.previousMilestoneLockEnv = null;
   s.hadMilestoneLockEnv = false;
   s.milestoneLockEnvCaptured = false;
+}
+
+function normalizeSessionFilePath(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const firstLine = trimmed.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!firstLine) return null;
+
+  // Guard against accidental message concatenation by trimming to .jsonl.
+  const jsonlIndex = firstLine.toLowerCase().indexOf(".jsonl");
+  const candidate = jsonlIndex >= 0 ? firstLine.slice(0, jsonlIndex + ".jsonl".length) : firstLine;
+  if (!isAbsolute(candidate)) return null;
+  if (!candidate.toLowerCase().endsWith(".jsonl")) return null;
+  return candidate;
 }
 
 export function startAutoDetached(
@@ -1056,7 +1071,7 @@ export async function pauseAuto(
   // from provider-error pause and avoid hard-stopping (#2762).
   resolveAgentEndCancelled(_errorContext);
 
-  s.pausedSessionFile = ctx?.sessionManager?.getSessionFile() ?? null;
+  s.pausedSessionFile = normalizeSessionFilePath(ctx?.sessionManager?.getSessionFile() ?? null);
 
   // Persist paused-session metadata so resume survives /exit (#1383).
   // The fresh-start bootstrap checks for this file and restores worktree context.
@@ -1364,7 +1379,11 @@ export async function startAuto(
         s.autoStartTime = meta.autoStartTime || Date.now();
         s.sessionMilestoneLock = meta.milestoneLock ?? null;
         s.paused = true;
-        try { unlinkSync(pausedPath); } catch (e) { logWarning("session", `pause file cleanup failed: ${e instanceof Error ? e.message : String(e)}`, { file: "auto.ts" }); }
+        try { unlinkSync(pausedPath); } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+            logWarning("session", `pause file cleanup failed: ${e instanceof Error ? e.message : String(e)}`, { file: "auto.ts" });
+          }
+        }
         ctx.ui.notify(
           `Resuming paused custom workflow${meta.activeRunDir ? ` (${meta.activeRunDir})` : ""}.`,
           "info",
@@ -1383,7 +1402,9 @@ export async function startAuto(
           const summaryFile = resolveMilestoneFile(base, meta.milestoneId, "SUMMARY");
           if (!mDir || summaryFile) {
             try { unlinkSync(pausedPath); } catch (err) {
-              logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
+              if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+                logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
+              }
             }
             ctx.ui.notify(
               `Paused milestone ${meta.milestoneId} is ${!mDir ? "missing" : "already complete"}. Starting fresh.`,
@@ -1393,20 +1414,28 @@ export async function startAuto(
             s.currentMilestoneId = meta.milestoneId;
             s.originalBasePath = meta.originalBasePath || base;
             s.stepMode = meta.stepMode ?? requestedStepMode;
-            s.pausedSessionFile = meta.sessionFile ?? null;
+            s.pausedSessionFile = normalizeSessionFilePath(meta.sessionFile ?? null);
             s.pausedUnitType = meta.unitType ?? null;
             s.pausedUnitId = meta.unitId ?? null;
             s.autoStartTime = meta.autoStartTime || Date.now();
             s.sessionMilestoneLock = meta.milestoneLock ?? null;
             s.paused = true;
-            try { unlinkSync(pausedPath); } catch (e) { logWarning("session", `pause file cleanup failed: ${e instanceof Error ? e.message : String(e)}`, { file: "auto.ts" }); }
+            try { unlinkSync(pausedPath); } catch (e) {
+              if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+                logWarning("session", `pause file cleanup failed: ${e instanceof Error ? e.message : String(e)}`, { file: "auto.ts" });
+              }
+            }
             ctx.ui.notify(
               `Resuming paused session for ${meta.milestoneId}${meta.worktreePath && existsSync(meta.worktreePath) ? ` (worktree)` : ""}.`,
               "info",
             );
           }
         } else if (existsSync(pausedPath)) {
-          try { unlinkSync(pausedPath); } catch (e) { logWarning("session", `stale pause file cleanup failed: ${e instanceof Error ? e.message : String(e)}`, { file: "auto.ts" }); }
+          try { unlinkSync(pausedPath); } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+              logWarning("session", `stale pause file cleanup failed: ${e instanceof Error ? e.message : String(e)}`, { file: "auto.ts" });
+            }
+          }
         }
       }
     } catch (err) {
@@ -1465,7 +1494,9 @@ export async function startAuto(
     // Lock acquired — now safe to delete the pause file
     if (s.pausedSessionFile) {
       try { unlinkSync(s.pausedSessionFile); } catch (err) {
-        logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
+        }
       }
       s.pausedSessionFile = null;
     }
@@ -1776,12 +1807,12 @@ export async function dispatchHookUnit(
     }
   }
 
-  const sessionFile = ctx.sessionManager.getSessionFile();
+  const sessionFile = normalizeSessionFilePath(ctx.sessionManager.getSessionFile());
   writeLock(
     lockBase(),
     hookUnitType,
     triggerUnitId,
-    sessionFile,
+    sessionFile ?? undefined,
   );
 
   clearUnitTimeout();
