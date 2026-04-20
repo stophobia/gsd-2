@@ -1199,6 +1199,8 @@ let currentPath: string | null = null;
 let currentPid: number = 0;
 let _exitHandlerRegistered = false;
 let _dbOpenAttempted = false;
+let _lastDbError: Error | null = null;
+let _lastDbPhase: "open" | "initSchema" | "vacuum-recovery" | null = null;
 
 export function getDbProvider(): ProviderName | null {
   loadProvider();
@@ -1219,12 +1221,58 @@ export function wasDbOpenAttempted(): boolean {
   return _dbOpenAttempted;
 }
 
+export function getDbStatus(): {
+  available: boolean;
+  provider: ProviderName | null;
+  attempted: boolean;
+  lastError: Error | null;
+  lastPhase: "open" | "initSchema" | "vacuum-recovery" | null;
+} {
+  loadProvider();
+  return {
+    available: currentDb !== null,
+    provider: providerName,
+    attempted: _dbOpenAttempted,
+    lastError: _lastDbError,
+    lastPhase: _lastDbPhase,
+  };
+}
+
 export function openDatabase(path: string): boolean {
   _dbOpenAttempted = true;
   if (currentDb && currentPath !== path) closeDatabase();
   if (currentDb && currentPath === path) return true;
 
-  const rawDb = openRawDb(path);
+  // Reset error state only when a new open attempt is actually going to run.
+  _lastDbError = null;
+  _lastDbPhase = null;
+
+  let rawDb: unknown;
+  let fallbackProvider: ProviderName | null = null;
+  let fallbackModule: unknown = null;
+  try {
+    rawDb = openRawDb(path);
+  } catch (primaryErr) {
+    _lastDbPhase = "open";
+    _lastDbError = primaryErr instanceof Error ? primaryErr : new Error(String(primaryErr));
+    // node:sqlite loaded but failed to open this file — try better-sqlite3 as fallback.
+    if (providerName === "node:sqlite") {
+      try {
+        const mod = _require("better-sqlite3");
+        const Db = (mod && mod.default) ? mod.default : mod;
+        if (typeof Db === "function") {
+          rawDb = new Db(path);
+          fallbackProvider = "better-sqlite3";
+          fallbackModule = Db;
+          _lastDbError = null;
+          _lastDbPhase = null;
+        }
+      } catch {
+        // fallback unavailable; surface original error
+      }
+    }
+    if (!rawDb) throw primaryErr;
+  }
   if (!rawDb) return false;
 
   const adapter = createAdapter(rawDb);
@@ -1240,13 +1288,23 @@ export function openDatabase(path: string): boolean {
         initSchema(adapter, fileBacked);
         process.stderr.write("gsd-db: recovered corrupt database via VACUUM\n");
       } catch (retryErr) {
+        _lastDbPhase = "vacuum-recovery";
+        _lastDbError = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
         try { adapter.close(); } catch (e) { logWarning("db", `close after VACUUM failed: ${(e as Error).message}`); }
         throw retryErr;
       }
     } else {
-      try { adapter.close(); } catch (e) { logWarning("db", `close after VACUUM failed: ${(e as Error).message}`); }
+      _lastDbPhase = "initSchema";
+      _lastDbError = err instanceof Error ? err : new Error(String(err));
+      try { adapter.close(); } catch (e) { logWarning("db", `close after initSchema failed: ${(e as Error).message}`); }
       throw err;
     }
+  }
+
+  // Commit fallback provider switch only after open + schema both succeeded.
+  if (fallbackProvider) {
+    providerName = fallbackProvider;
+    providerModule = fallbackModule;
   }
 
   currentDb = adapter;
@@ -1276,8 +1334,12 @@ export function closeDatabase(): void {
     currentDb = null;
     currentPath = null;
     currentPid = 0;
-    _dbOpenAttempted = false;
   }
+  // Reset session-scoped state unconditionally so stale error info from a
+  // failed open doesn't persist into the next open attempt or status check.
+  _dbOpenAttempted = false;
+  _lastDbError = null;
+  _lastDbPhase = null;
 }
 
 /** Run a full VACUUM — call sparingly (e.g. after milestone completion). */

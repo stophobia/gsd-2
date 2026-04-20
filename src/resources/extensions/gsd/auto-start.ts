@@ -60,7 +60,7 @@ import { initRoutingHistory } from "./routing-history.js";
 import { restoreHookState, resetHookState } from "./post-unit-hooks.js";
 import { resetProactiveHealing, setLevelChangeCallback } from "./doctor-proactive.js";
 import { snapshotSkills } from "./skill-discovery.js";
-import { isDbAvailable, getMilestone, openDatabase } from "./gsd-db.js";
+import { isDbAvailable, getMilestone, openDatabase, getDbStatus } from "./gsd-db.js";
 import { hideFooter } from "./auto-dashboard.js";
 import {
   debugLog,
@@ -762,9 +762,22 @@ export async function bootstrapAutoSession(
     // call returns "db_unavailable", triggering artifact-retry which
     // re-dispatches the same task — producing an infinite loop (#2419).
     if (existsSync(gsdDbPath) && !isDbAvailable()) {
+      const dbStatus = getDbStatus();
+      const phaseHint = dbStatus.lastPhase === "open"
+        ? "The database file could not be opened"
+        : dbStatus.lastPhase === "initSchema"
+          ? "The database schema could not be initialized"
+          : dbStatus.lastPhase === "vacuum-recovery"
+            ? "Corruption recovery (VACUUM) failed"
+            : dbStatus.attempted
+              ? "The database could not be opened (phase unknown)"
+              : "The database provider could not be loaded";
+      const errorDetail = dbStatus.lastError ? ` (${dbStatus.lastError.message})` : "";
+      const providerHint = dbStatus.provider
+        ? ` Provider: ${dbStatus.provider}.`
+        : " No SQLite provider available — check Node >= 22 or install better-sqlite3.";
       ctx.ui.notify(
-        "SQLite database exists but failed to open. Auto-mode cannot proceed without a working database provider. " +
-          "Check for corrupt gsd.db or missing native SQLite bindings.",
+        `SQLite database exists but failed to open: ${gsdDbPath}. ${phaseHint}${errorDetail}.${providerHint}`,
         "error",
       );
       return releaseLockAndReturn();
