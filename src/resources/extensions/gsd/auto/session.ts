@@ -17,7 +17,7 @@
  */
 
 import type { Api, Model } from "@gsd/pi-ai";
-import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import type { GitServiceImpl } from "../git-service.js";
 import type { CaptureEntry } from "../captures.js";
 import type { BudgetAlertLevel } from "../auto-budget.js";
@@ -39,6 +39,8 @@ export interface StartModel {
   provider: string;
   id: string;
 }
+
+export type ThinkingLevelSnapshot = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
 export interface PendingVerificationRetry {
   unitId: string;
@@ -120,6 +122,8 @@ export class AutoSession {
   currentDispatchedModelId: string | null = null;
   originalModelId: string | null = null;
   originalModelProvider: string | null = null;
+  autoModeStartThinkingLevel: ThinkingLevelSnapshot | null = null;
+  originalThinkingLevel: ThinkingLevelSnapshot | null = null;
   lastBudgetAlertLevel: BudgetAlertLevel = 0;
 
   // ── Recovery ─────────────────────────────────────────────────────────────
@@ -241,6 +245,8 @@ export class AutoSession {
     this.currentDispatchedModelId = null;
     this.originalModelId = null;
     this.originalModelProvider = null;
+    this.autoModeStartThinkingLevel = null;
+    this.originalThinkingLevel = null;
     this.lastBudgetAlertLevel = 0;
 
     // Recovery

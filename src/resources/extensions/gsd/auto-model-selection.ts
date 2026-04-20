@@ -33,6 +33,14 @@ export interface PreferredModelConfig {
   source: "explicit" | "synthesized";
 }
 
+function reapplyThinkingLevel(
+  pi: ExtensionAPI,
+  level: ReturnType<ExtensionAPI["getThinkingLevel"]> | null | undefined,
+): void {
+  if (!level) return;
+  pi.setThinkingLevel(level);
+}
+
 export function resolvePreferredModelConfig(
   unitType: string,
   autoModeStartModel: { provider: string; id: string; flatRateCtx?: FlatRateContext } | null,
@@ -97,6 +105,8 @@ export async function selectAndApplyModel(
   isAutoMode = true,
   /** Explicit /gsd model pin captured at bootstrap for long-running auto loops. */
   sessionModelOverride?: { provider: string; id: string } | null,
+  /** Thinking level captured at auto-mode start and re-applied after model swaps. */
+  autoModeStartThinkingLevel?: ReturnType<ExtensionAPI["getThinkingLevel"]> | null,
 ): Promise<ModelSelectionResult> {
   const uokFlags = resolveUokFlags(prefs);
   const effectiveSessionModelOverride = sessionModelOverride === undefined
@@ -380,6 +390,7 @@ export async function selectAndApplyModel(
       const ok = await pi.setModel(model, { persist: false });
       if (ok) {
         appliedModel = model;
+        reapplyThinkingLevel(pi, autoModeStartThinkingLevel);
 
         // ADR-005: Adjust active tool set for the selected model's provider capabilities.
         // Hard-filter incompatible tools, then let extensions override via adjust_tool_set hook.
@@ -456,10 +467,14 @@ export async function selectAndApplyModel(
           );
           if (byId) {
             const fallbackOk = await pi.setModel(byId, { persist: false });
-            if (fallbackOk) appliedModel = byId;
+            if (fallbackOk) {
+              appliedModel = byId;
+              reapplyThinkingLevel(pi, autoModeStartThinkingLevel);
+            }
           }
         } else {
           appliedModel = startModel;
+          reapplyThinkingLevel(pi, autoModeStartThinkingLevel);
         }
       }
     }

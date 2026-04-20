@@ -273,8 +273,8 @@ export async function bootstrapAutoSession(
   //
   // Precedence:
   // 1) Explicit session override via /gsd model (this session)
-  // 2) GSD model preferences from PREFERENCES.md (validated against live auth)
-  // 3) Current session model from settings/session restore (if provider ready)
+  // 2) Current session model from settings/session restore (if provider ready)
+  // 3) GSD model preferences from PREFERENCES.md (validated against live auth)
   //
   // This preserves #3517 defaults while honoring explicit runtime model
   // selection for subsequent /gsd runs in the same session.
@@ -314,11 +314,14 @@ export async function bootstrapAutoSession(
   }
   const sessionModelReady =
     ctx.model && ctx.modelRegistry.isProviderRequestReady(ctx.model.provider);
+  const currentSessionModel = (sessionModelReady && ctx.model)
+    ? { provider: ctx.model.provider, id: ctx.model.id }
+    : null;
+  const startThinkingSnapshot = pi.getThinkingLevel();
   const startModelSnapshot = manualSessionOverride
+    ?? currentSessionModel
     ?? validatedPreferredModel
-    ?? (sessionModelReady && ctx.model
-      ? { provider: ctx.model.provider, id: ctx.model.id }
-      : null);
+    ?? null;
 
   try {
     // Validate GSD_PROJECT_ID early so the user gets immediate feedback
@@ -664,8 +667,9 @@ export async function bootstrapAutoSession(
     s.pendingQuickTasks = [];
     s.currentUnit = null;
     s.currentMilestoneId = state.activeMilestone?.id ?? null;
-    s.originalModelId = ctx.model?.id ?? null;
-    s.originalModelProvider = ctx.model?.provider ?? null;
+    s.originalModelId = startModelSnapshot?.id ?? ctx.model?.id ?? null;
+    s.originalModelProvider = startModelSnapshot?.provider ?? ctx.model?.provider ?? null;
+    s.originalThinkingLevel = startThinkingSnapshot ?? null;
 
     // Register SIGTERM handler
     registerSigtermHandler(base);
@@ -779,6 +783,7 @@ export async function bootstrapAutoSession(
         id: startModelSnapshot.id,
       };
     }
+    s.autoModeStartThinkingLevel = startThinkingSnapshot ?? null;
     s.manualSessionModelOverride = manualSessionOverride ?? null;
 
     // Apply worker model override from parallel orchestrator (#worker-model).

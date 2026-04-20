@@ -1471,6 +1471,7 @@ export async function runUnitPhase(
     sidecarItem ? undefined : { isRetry, previousTier },
     undefined,
     s.manualSessionModelOverride,
+    s.autoModeStartThinkingLevel,
   );
   s.currentUnitRouting =
     modelResult.routing as AutoSession["currentUnitRouting"];
@@ -1485,6 +1486,9 @@ export async function runUnitPhase(
     if (match) {
       const ok = await pi.setModel(match, { persist: false });
       if (ok) {
+        if (s.autoModeStartThinkingLevel) {
+          pi.setThinkingLevel(s.autoModeStartThinkingLevel);
+        }
         s.currentUnitModel = match as AutoSession["currentUnitModel"];
         ctx.ui.notify(`Hook model override: ${match.provider}/${match.id}`, "info");
       } else {

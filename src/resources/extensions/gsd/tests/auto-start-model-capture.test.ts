@@ -52,13 +52,27 @@ test("bootstrapAutoSession checks manual session override before preferences", (
     "manual override and preference fallback must be resolved before building startModelSnapshot",
   );
 
-  // The validated preferred model must still appear as one of the snapshot
-  // sources so PREFERENCES.md continues to win over a stale settings.json
-  // default for built-in providers.
+  // Preferred model should still be part of fallback resolution.
   const snapshotBlock = source.slice(snapshotIdx, snapshotIdx + 400);
   assert.ok(
     snapshotBlock.includes("validatedPreferredModel") || snapshotBlock.includes("preferredModel"),
     "startModelSnapshot must still consider preferredModel for built-in providers",
+  );
+});
+
+test("bootstrapAutoSession prioritizes current session model over PREFERENCES.md default", () => {
+  const snapshotIdx = source.indexOf("const startModelSnapshot = manualSessionOverride");
+  assert.ok(snapshotIdx > -1, "auto-start.ts should build startModelSnapshot");
+
+  const snapshotBlock = source.slice(snapshotIdx, snapshotIdx + 500);
+  const currentIdx = snapshotBlock.indexOf("currentSessionModel");
+  const preferredIdx = snapshotBlock.indexOf("validatedPreferredModel");
+
+  assert.ok(currentIdx > -1, "startModelSnapshot should include currentSessionModel");
+  assert.ok(preferredIdx > -1, "startModelSnapshot should include validatedPreferredModel");
+  assert.ok(
+    currentIdx < preferredIdx,
+    "startModelSnapshot should prefer currentSessionModel before validatedPreferredModel",
   );
 });
 
@@ -110,4 +124,20 @@ test("bootstrapAutoSession validates preferred model against live registry auth 
 
   const warningIdx = source.indexOf("is not configured; falling back to session default");
   assert.ok(warningIdx > -1, "auto-start.ts should warn when preferred model is unconfigured");
+});
+
+test("bootstrapAutoSession snapshots and persists thinking level for auto-mode lifecycle", () => {
+  const captureIdx = source.indexOf("const startThinkingSnapshot = pi.getThinkingLevel()");
+  assert.ok(captureIdx > -1, "auto-start.ts should snapshot thinking level at bootstrap start");
+
+  const originalThinkingIdx = source.indexOf("s.originalThinkingLevel = startThinkingSnapshot ?? null");
+  assert.ok(originalThinkingIdx > -1, "auto-start.ts should store originalThinkingLevel from snapshot");
+
+  const autoThinkingIdx = source.indexOf("s.autoModeStartThinkingLevel = startThinkingSnapshot ?? null");
+  assert.ok(autoThinkingIdx > -1, "auto-start.ts should store autoModeStartThinkingLevel from snapshot");
+
+  assert.ok(
+    captureIdx < originalThinkingIdx && captureIdx < autoThinkingIdx,
+    "thinking snapshot must be captured before session state assignment",
+  );
 });

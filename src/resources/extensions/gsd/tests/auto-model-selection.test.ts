@@ -341,6 +341,18 @@ test("dynamic routing passes provider-qualified model keys to the router", () =>
   );
 });
 
+test("selectAndApplyModel re-applies captured thinking level after setModel success", () => {
+  const src = readFileSync(join(__dirname, "..", "auto-model-selection.ts"), "utf-8");
+  assert.ok(
+    src.includes("autoModeStartThinkingLevel?: ReturnType<ExtensionAPI[\"getThinkingLevel\"]> | null"),
+    "selectAndApplyModel should accept an autoModeStartThinkingLevel parameter",
+  );
+  assert.ok(
+    src.includes("reapplyThinkingLevel(pi, autoModeStartThinkingLevel)"),
+    "selectAndApplyModel should re-apply captured thinking level after model changes",
+  );
+});
+
 test("resolveModelId: anthropic wins over claude-code when session provider is not claude-code", () => {
   const availableModels = [
     { id: "claude-sonnet-4-6", provider: "claude-code" },

@@ -213,6 +213,7 @@ export interface LoopDeps {
     retryContext?: { isRetry: boolean; previousTier?: string },
     isAutoMode?: boolean,
     sessionModelOverride?: { provider: string; id: string } | null,
+    autoModeStartThinkingLevel?: ReturnType<ExtensionAPI["getThinkingLevel"]> | null,
   ) => Promise<{
     routing: { tier: string; modelDowngraded: boolean } | null;
     appliedModel: { provider: string; id: string } | null;

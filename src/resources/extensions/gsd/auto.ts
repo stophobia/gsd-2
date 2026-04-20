@@ -969,7 +969,7 @@ export async function stopAuto(
       logWarning("engine", `file unlink failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
     }
 
-    // ── Step 13: Restore original model (before reset clears IDs) ──
+    // ── Step 13: Restore original model + thinking (before reset clears IDs) ──
     try {
       if (pi && ctx && s.originalModelId && s.originalModelProvider) {
         const original = ctx.modelRegistry.find(
@@ -977,6 +977,9 @@ export async function stopAuto(
           s.originalModelId,
         );
         if (original) await pi.setModel(original);
+      }
+      if (pi && s.originalThinkingLevel) {
+        pi.setThinkingLevel(s.originalThinkingLevel);
       }
     } catch (e) {
       debugLog("stop-cleanup-model", { error: e instanceof Error ? e.message : String(e) });
