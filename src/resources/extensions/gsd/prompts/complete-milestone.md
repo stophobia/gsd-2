@@ -14,6 +14,8 @@ Preloaded context below — the roadmap, compact slice-summary excerpts, require
 
 Start with what the excerpts give you. Read full files when the section heads signal richer context you need.
 
+**On-demand Read ordering:** Complete all slice SUMMARY Reads you need for cross-slice synthesis, the Decision Re-evaluation table, and LEARNINGS **before** calling `gsd_complete_milestone` (step 10). Once that tool runs, the milestone is marked complete in the DB — running out of tool budget between step 10 and the LEARNINGS write (step 12) leaves the milestone committed without its LEARNINGS artifact.
+
 {{inlinedContext}}
 
 Then:
