@@ -1425,7 +1425,7 @@ export async function startAuto(
             try {
               summaryIsTerminal = classifyMilestoneSummaryContent(readFileSync(summaryFile, "utf-8")) !== "failure";
             } catch {
-              summaryIsTerminal = true;
+              summaryIsTerminal = false;
             }
           }
           if (!mDir || summaryIsTerminal) {

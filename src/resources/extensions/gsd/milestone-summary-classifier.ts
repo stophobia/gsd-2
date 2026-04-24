@@ -27,7 +27,7 @@ export function classifyMilestoneSummaryContent(content: string): MilestoneSumma
     /(?:^|\n)\s*#\s*BLOCKER\b/i.test(content)
     || /auto-mode recovery failed/i.test(content)
     || /verification\s+failed/i.test(content)
-    || /\bnot complete\b/i.test(content);
+    || /(?:^|\n)\s*(?:status|verdict|outcome|result)\s*[:=-]\s*not complete\b/i.test(content);
   if (failureSignal) return "failure";
   return "unknown";
 }

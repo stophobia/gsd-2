@@ -32,6 +32,7 @@ import { isInfrastructureError, isTransientCooldownError, getCooldownRetryAfterM
 import { resolveEngine } from "../engine-resolver.js";
 import { logWarning } from "../workflow-logger.js";
 import { gsdRoot } from "../paths.js";
+import { atomicWriteSync } from "../atomic-write.js";
 import { resolveUokFlags } from "../uok/flags.js";
 import { scheduleSidecarQueue } from "../uok/execution-graph.js";
 import { ExecutionGraphScheduler } from "../uok/execution-graph.js";
@@ -126,7 +127,7 @@ function saveCustomVerifyRetryCounts(s: AutoSession): void {
       return;
     }
     mkdirSync(customVerifyRetryStateDir(s), { recursive: true });
-    writeFileSync(filePath, JSON.stringify({
+    atomicWriteSync(filePath, JSON.stringify({
       counts: Object.fromEntries(retryCounts),
       updatedAt: new Date().toISOString(),
     }) + "\n");

@@ -446,7 +446,7 @@ export async function bootstrapAutoSession(
         try {
           return classifyMilestoneSummaryContent(readFileSync(summaryFile, "utf-8")) !== "failure";
         } catch {
-          return true;
+          return false;
         }
       },
     );
