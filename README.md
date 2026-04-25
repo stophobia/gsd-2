@@ -625,19 +625,19 @@ Start GSD with `gsd --debug` to enable structured JSONL diagnostic logging. Debu
 
 ### Token Optimization
 
-GSD includes a coordinated token optimization system that reduces usage by 40-60% on cost-sensitive workloads. Set a single preference to coordinate model selection, phase skipping, and context compression:
+GSD includes a coordinated token optimization system that reduces usage by 40-60% on cost-sensitive workloads. Set a single preference to coordinate model tier selection, phase skipping, and context compression:
 
 ```yaml
 token_profile: budget # or balanced (default), quality
 ```
 
-| Profile    | Savings | What It Does                                                   |
-| ---------- | ------- | -------------------------------------------------------------- |
-| `budget`   | 40-60%  | Cheap models, skip research/reassess, minimal context inlining |
-| `balanced` | 10-20%  | Default models, skip slice research, standard context          |
-| `quality`  | 0%      | All phases, all context, full model power                      |
+| Profile    | Savings | What It Does                                                                     |
+| ---------- | ------- | -------------------------------------------------------------------------------- |
+| `budget`   | 40-60%  | Light/standard tier defaults, skip research/reassess, minimal context inlining   |
+| `balanced` | 10-20%  | Standard tier for core work, light tier for simple work, standard context        |
+| `quality`  | 0%      | Heavy tier for planning, standard tier for core work, full context               |
 
-**Complexity-based routing** automatically classifies tasks as simple/standard/complex and routes to appropriate models. Simple docs tasks get Haiku; complex architectural work gets Opus. The classification is heuristic (sub-millisecond, no LLM calls) and learns from outcomes via a persistent routing history.
+**Complexity-based routing** automatically classifies tasks as simple/standard/complex and routes to appropriate available models. Token profiles define provider-agnostic tier intentions, so simple docs tasks use a light-tier configured model and complex architectural work can use a heavy-tier configured model. The classification is heuristic (sub-millisecond, no LLM calls) and learns from outcomes via a persistent routing history.
 
 **Budget pressure** graduates model downgrading as you approach your budget ceiling — 50%, 75%, and 90% thresholds progressively shift work to cheaper tiers.
 
