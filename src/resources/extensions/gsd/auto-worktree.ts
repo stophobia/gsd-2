@@ -1031,20 +1031,31 @@ export function enterBranchModeForMilestone(
       validatedPrefBranch ??
       nativeDetectMainBranch(basePath);
 
-    // Ancestry guard: refuse to force-reset a branch that has commits not
-    // reachable from startPoint. Crash-then-resume cycles that don't write
-    // a resume file would otherwise silently orphan prior-session work.
-    // (Issue #4980 HIGH-3)
-    if (nativeBranchExists(basePath, branch)) {
-      const branchIsAncestor = nativeIsAncestor(basePath, branch, startPoint);
-      if (!branchIsAncestor) {
-        throw new GSDError(
-          GSD_GIT_ERROR,
-          `Branch "${branch}" already has commits not reachable from "${startPoint}". ` +
-          `Refusing to force-reset — would orphan prior work. ` +
-          `Resume the existing milestone or run \`git branch -D ${branch}\` to discard.`,
-        );
-      }
+    // TOCTOU ancestry guard (Issue #4980 HIGH-3).
+    //
+    // The outer `branchExists` check at line 1012 is racy: a concurrent
+    // process (parallel-orchestrator worker, side-by-side `gsd` instance,
+    // or manual `git branch` invocation) may have created the branch with
+    // real commits between that check and this point. `nativeBranchForceReset`
+    // does `git branch -f`, which silently overwrites the branch ref —
+    // orphaning any commits not reachable from `startPoint`. Re-check
+    // immediately before the destructive call and refuse if the branch
+    // suddenly exists with non-ancestor commits.
+    //
+    // Note: under single-threaded execution this is rarely reached, but it
+    // is NOT dead code — it is the only barrier against a TOCTOU-induced
+    // commit loss in this code path.
+    const concurrentlyCreated = nativeBranchExists(basePath, branch);
+    if (
+      concurrentlyCreated &&
+      !nativeIsAncestor(basePath, branch, startPoint)
+    ) {
+      throw new GSDError(
+        GSD_GIT_ERROR,
+        `Branch "${branch}" was created concurrently with commits not reachable from "${startPoint}". ` +
+        `Refusing to force-reset — would orphan prior work. ` +
+        `Resume the existing milestone or run \`git branch -D ${branch}\` to discard.`,
+      );
     }
     // nativeBranchForceReset creates (or resets) branch at startPoint,
     // then checkout switches HEAD to it.

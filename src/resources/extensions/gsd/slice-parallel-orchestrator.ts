@@ -149,9 +149,26 @@ function persistSliceState(): void {
     const tmp = dest + TMP_SUFFIX;
     writeFileSync(tmp, JSON.stringify(persisted, null, 2), "utf-8");
     renameSync(tmp, dest);
+    lastPersistTs = Date.now();
   } catch {
     /* non-fatal: persistence is best-effort */
   }
+}
+
+/**
+ * Throttled wrapper around `persistSliceState`. Skips if the last successful
+ * persist was less than `PERSIST_THROTTLE_MS` ago; otherwise persists
+ * immediately. Use this on hot paths (e.g. `message_end` events) where we
+ * receive many events per second per worker. Terminal events (worker exit,
+ * crash, stop) should call `persistSliceState()` directly to guarantee the
+ * final state hits disk regardless of timing.
+ */
+const PERSIST_THROTTLE_MS = 1000;
+let lastPersistTs = 0;
+
+function persistSliceStateThrottled(): void {
+  if (Date.now() - lastPersistTs < PERSIST_THROTTLE_MS) return;
+  persistSliceState();
 }
 
 function removeSliceStateFile(basePath: string): void {
@@ -423,6 +440,7 @@ export function resetSliceOrchestrator(): void {
     }
   }
   sliceState = null;
+  lastPersistTs = 0;
 }
 
 // ─── Internal: Conflict Filtering ──────────────────────────────────────────
@@ -663,8 +681,10 @@ function processSliceWorkerLine(
       }
       worker.completedUnits++;
       // Persist cost / progress updates so a crash mid-run preserves them.
-      // (Issue #4980 HIGH-8)
-      persistSliceState();
+      // Throttled (~1/s per process) so high-frequency message_end traffic
+      // does not saturate disk I/O. Worker exit / start / stop paths persist
+      // unthrottled to guarantee the terminal state lands. (Issue #4980 HIGH-8)
+      persistSliceStateThrottled();
     }
   }
 }
