@@ -534,11 +534,7 @@ if (cliFlags.listModels !== undefined) {
     additionalExtensionPaths: cliFlags.extensions.length > 0 ? cliFlags.extensions : undefined,
   })
   await listModelsLoader.reload()
-  const listModelsExtensions = listModelsLoader.getExtensions()
-  for (const { name, config } of listModelsExtensions.runtime.pendingProviderRegistrations) {
-    modelRegistry.registerProvider(name, config)
-  }
-  listModelsExtensions.runtime.pendingProviderRegistrations = []
+  flushPendingProviderRegistrations(listModelsLoader, modelRegistry)
 
   const models = modelRegistry.getAvailable()
   if (models.length === 0) {
