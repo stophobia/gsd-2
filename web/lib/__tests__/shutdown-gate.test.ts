@@ -9,6 +9,7 @@ import {
   isDaemonMode,
   registerActiveStream,
   recordBoot,
+  drainStreams,
 } from "../shutdown-gate.ts";
 
 // Reset gate state between tests by cancelling any pending shutdown and
@@ -93,7 +94,7 @@ describe("shutdown-gate", () => {
     });
   });
 
-  describe("double-scheduleShutdown resets timer", (t) => {
+  describe("double-scheduleShutdown resets timer", () => {
     test("calling scheduleShutdown twice still leaves exactly one pending timer", () => {
       scheduleShutdown();
       scheduleShutdown();
@@ -104,7 +105,7 @@ describe("shutdown-gate", () => {
     });
   });
 
-  describe("cancelShutdown after timer fires is a no-op", (t) => {
+  describe("cancelShutdown after timer fires is a no-op", () => {
     test("cancelShutdown() when no timer is pending does not throw", () => {
       assert.equal(isShutdownPending(), false);
       assert.doesNotThrow(() => cancelShutdown());
@@ -113,21 +114,26 @@ describe("shutdown-gate", () => {
   });
 
   describe("registerActiveStream — SSE drain", () => {
-    test("registered unsubscriber is called when drainStreams fires", (t) => {
-      return new Promise<void>((resolve) => {
-        let called = false;
-        const deregister = registerActiveStream(() => {
-          called = true;
-        });
+    test("drainStreams calls registered unsubscribers and clears active streams", () => {
+      const calls: number[] = [];
+      registerActiveStream(() => calls.push(1));
+      registerActiveStream(() => calls.push(2));
+      assert.equal(globalThis.__gsdShutdownGate!.activeStreams.size, 2);
+      drainStreams();
+      assert.deepEqual(calls, [1, 2]);
+      assert.equal(globalThis.__gsdShutdownGate!.activeStreams.size, 0);
+    });
 
-        // Manually drain by clearing the set via scheduleShutdown path is not
-        // feasible without process.exit — instead test the deregister path:
-        // deregister removes from the set so it won't be called.
-        deregister();
-        assert.equal(called, false, "deregister must prevent the callback from being called on drain");
-
-        resolve();
+    test("deregister prevents callback from being called when drainStreams fires", () => {
+      let called = false;
+      const deregister = registerActiveStream(() => {
+        called = true;
       });
+
+      deregister();
+      drainStreams();
+      assert.equal(called, false, "deregister must prevent the callback from being called on drain");
+      assert.equal(globalThis.__gsdShutdownGate!.activeStreams.size, 0);
     });
 
     test("deregister function removes stream from active set", () => {
@@ -186,6 +192,17 @@ describe("shutdown-gate", () => {
       assert.ok(globalThis.__gsdShutdownGate, "singleton must exist on globalThis");
       assert.ok(globalThis.__gsdShutdownGate.activeStreams instanceof Set);
       assert.equal(typeof globalThis.__gsdShutdownGate.lastBootAt, "number");
+      assert.equal(typeof globalThis.__gsdShutdownGate.handlersRegistered, "boolean");
+    });
+
+    test("module reload does not register duplicate process handlers", async () => {
+      const sigtermListeners = process.listenerCount("SIGTERM");
+      const beforeExitListeners = process.listenerCount("beforeExit");
+
+      await import(`../shutdown-gate.ts?reload=${Date.now()}`);
+
+      assert.equal(process.listenerCount("SIGTERM"), sigtermListeners);
+      assert.equal(process.listenerCount("beforeExit"), beforeExitListeners);
     });
 
     test("isShutdownPending reflects gate.shutdownTimer (singleton coherence)", () => {

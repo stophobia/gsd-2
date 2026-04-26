@@ -36,6 +36,7 @@ declare global {
         shutdownTimer: ReturnType<typeof setTimeout> | null;
         activeStreams: Set<() => void>;
         lastBootAt: number;
+        handlersRegistered: boolean;
       }
     | undefined;
 }
@@ -45,16 +46,18 @@ if (!globalThis.__gsdShutdownGate) {
     shutdownTimer: null,
     activeStreams: new Set(),
     lastBootAt: 0,
+    handlersRegistered: false,
   };
 }
 
 const gate = globalThis.__gsdShutdownGate;
+gate.handlersRegistered ??= false;
 
 const SHUTDOWN_DELAY_MS = 3_000;
 
 // ── Drain helper ───────────────────────────────────────────────────────────
 
-function drainStreams(): void {
+export function drainStreams(): void {
   for (const unsubscribe of gate.activeStreams) {
     try {
       unsubscribe();
@@ -71,8 +74,29 @@ function handleForcedExit(): void {
   drainStreams();
 }
 
-process.on("SIGTERM", handleForcedExit);
-process.on("beforeExit", handleForcedExit);
+type HotDisposeApi = {
+  dispose(callback: () => void): void;
+};
+
+type HotModule = {
+  hot?: HotDisposeApi;
+};
+
+const hotModule =
+  (import.meta as ImportMeta & { webpackHot?: HotDisposeApi }).webpackHot ??
+  (typeof module === "undefined" ? undefined : (module as HotModule).hot);
+
+if (!gate.handlersRegistered) {
+  process.on("SIGTERM", handleForcedExit);
+  process.on("beforeExit", handleForcedExit);
+  gate.handlersRegistered = true;
+
+  hotModule?.dispose(() => {
+    process.off("SIGTERM", handleForcedExit);
+    process.off("beforeExit", handleForcedExit);
+    gate.handlersRegistered = false;
+  });
+}
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
