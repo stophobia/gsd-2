@@ -1550,11 +1550,14 @@ export function getActiveAutoWorktreeContext(): {
 } | null {
   if (!originalBase) return null;
   const cwd = process.cwd();
-  const resolvedBase = existsSync(originalBase)
-    ? realpathSync(originalBase)
-    : originalBase;
-  const wtDir = join(resolvedBase, ".gsd", "worktrees");
-  if (!cwd.startsWith(wtDir)) return null;
+  if (!isGsdWorktreePath(cwd)) return null;
+  const cwdProjectRoot = resolveWorktreeProjectRoot(cwd, originalBase);
+  if (
+    normalizeWorktreePathForCompare(cwdProjectRoot) !==
+    normalizeWorktreePathForCompare(originalBase)
+  ) {
+    return null;
+  }
   const worktreeName = detectWorktreeName(cwd);
   if (!worktreeName) return null;
   const branch = nativeGetCurrentBranch(cwd);

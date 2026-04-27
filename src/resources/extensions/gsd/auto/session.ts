@@ -21,6 +21,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent
 import type { GitServiceImpl } from "../git-service.js";
 import type { CaptureEntry } from "../captures.js";
 import type { BudgetAlertLevel } from "../auto-budget.js";
+import { resolveWorktreeProjectRoot } from "../worktree-root.js";
 
 // ─── Exported Types ──────────────────────────────────────────────────────────
 
@@ -226,12 +227,7 @@ export class AutoSession {
   }
 
   get lockBasePath(): string {
-    // Prefer originalBasePath (project root); fall back to basePath.
-    // Strip /.gsd/worktrees/ suffix if basePath is itself a worktree path
-    // to avoid reading/writing the lock inside the worktree (#3729).
-    const resolved = this.originalBasePath || this.basePath;
-    const markerIdx = resolved.indexOf("/.gsd/worktrees/");
-    return markerIdx !== -1 ? resolved.slice(0, markerIdx) : resolved;
+    return resolveWorktreeProjectRoot(this.basePath, this.originalBasePath);
   }
 
   reset(): void {

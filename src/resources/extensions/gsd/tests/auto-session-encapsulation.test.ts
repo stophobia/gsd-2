@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AutoSession } from "../auto/session.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUTO_TS_PATH = join(__dirname, "..", "auto.ts");
@@ -31,6 +32,20 @@ function getSessionTsSource(): string {
 function getRuntimeStateTsSource(): string {
   return readFileSync(RUNTIME_STATE_TS_PATH, "utf-8");
 }
+
+test("AutoSession.lockBasePath uses GSD_PROJECT_ROOT for symlink-resolved worktrees", () => {
+  const savedProjectRoot = process.env.GSD_PROJECT_ROOT;
+  process.env.GSD_PROJECT_ROOT = "/real/project";
+  try {
+    const session = new AutoSession();
+    session.basePath = "/Users/dev/.gsd/projects/abc123/worktrees/M001/slices/S01";
+
+    assert.equal(session.lockBasePath, "/real/project");
+  } finally {
+    if (savedProjectRoot === undefined) delete process.env.GSD_PROJECT_ROOT;
+    else process.env.GSD_PROJECT_ROOT = savedProjectRoot;
+  }
+});
 
 // ── Invariant 1: No module-level mutable variables in auto.ts ────────────────
 

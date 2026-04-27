@@ -166,6 +166,18 @@ describe("auto-worktree lifecycle", () => {
       assert.ok(resolved, "existing worktree is found when basePath is the worktree path");
       assert.equal(realpathSync(resolved!), realWtPath);
       assert.equal(existsSync(join(realWtPath, ".gsd", "worktrees", "M001")), false);
+
+      enterAutoWorktree(tempDir, "M001");
+      process.chdir(join(realWtPath, ".gsd", "milestones", "M001"));
+      assert.deepStrictEqual(
+        getActiveAutoWorktreeContext(),
+        {
+          originalBase: tempDir,
+          worktreeName: "M001",
+          branch: "milestone/M001",
+        },
+        "active context is detected from a symlink-resolved worktree cwd",
+      );
     } finally {
       process.chdir(tempDir);
       try {
