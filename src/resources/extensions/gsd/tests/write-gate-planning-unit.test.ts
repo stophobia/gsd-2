@@ -161,16 +161,16 @@ test('planning-dispatch: allows task dispatch (delegated recon/planner during sl
   assert.strictEqual(r.block, false);
 });
 
-test('planning-dispatch: blocks when no agent classes supplied (deny-by-default)', () => {
-  const r = shouldBlockPlanningUnit('subagent', '', BASE, 'plan-slice', PLANNING_DISPATCH);
+test('planning-dispatch: blocks subagent dispatch when agentClasses is undefined (stale caller shim)', () => {
+  const r = shouldBlockPlanningUnit('subagent', '', BASE, 'plan-slice', PLANNING_DISPATCH, undefined);
   assert.strictEqual(r.block, true);
-  assert.match(r.reason!, /missing agent identities/);
+  assert.match(r.reason!, /stale caller/);
   assert.match(r.reason!, /tools-policy "planning-dispatch"/);
+});
 
+test('planning-dispatch: allows explicitly empty agent classes for downstream validation', () => {
   const empty = shouldBlockPlanningUnit('subagent', '', BASE, 'plan-slice', PLANNING_DISPATCH, []);
-  assert.strictEqual(empty.block, true);
-  assert.match(empty.reason!, /missing agent identities/);
-  assert.match(empty.reason!, /tools-policy "planning-dispatch"/);
+  assert.strictEqual(empty.block, false);
 });
 
 test('planning-dispatch: allows all globally allowed specialists when listed by policy', () => {

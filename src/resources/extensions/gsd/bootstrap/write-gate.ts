@@ -579,8 +579,11 @@ function allowedPlanningDispatchAgentsList(): string {
 function warnMissingPlanningDispatchAgentClasses(unitType: string, mode: string, toolName: string): void {
   if (warnedMissingPlanningDispatchAgentClasses) return;
   warnedMissingPlanningDispatchAgentClasses = true;
-  // TODO(#4934): Remove this once all subagent/task callers are verified to forward agent identities.
-  logWarning("intercept", "planning-dispatch subagent call missing agent identities; denying by default", {
+  // TODO(#5060): Remove this migration shim once all subagent/task callers are verified to forward agent identities.
+  const message = `[write-gate] planning-dispatch: shouldBlockPlanningUnit called for tool "${toolName}" ` +
+    `on unit "${unitType}" without agentClasses - stale caller; blocking dispatch.`;
+  console.warn(message);
+  logWarning("intercept", message, {
     unitType,
     mode,
     toolName,
@@ -648,8 +651,9 @@ function blockReason(unitType: string, mode: string, what: string): string {
  * predicate is a no-op.
  *
  * `agentClasses` is supplied by the tool hook for subagent-shaped calls. If
- * absent or empty, planning-dispatch fails closed so stale callers cannot
- * silently bypass the agent allowlists.
+ * absent, planning-dispatch fails closed so stale callers cannot silently
+ * bypass the agent allowlists. An explicitly supplied-but-empty list is
+ * allowed through so the downstream tool call can reject the malformed input.
  */
 export function shouldBlockPlanningUnit(
   toolName: string,
@@ -684,16 +688,25 @@ export function shouldBlockPlanningUnit(
       const requested = (agentClasses ?? []).map(a => a.trim()).filter(Boolean);
       const allowedSubagents = Array.isArray(policy.allowedSubagents) ? policy.allowedSubagents : [];
       const allowed = new Set(allowedSubagents);
-      if (requested.length === 0) {
+      // When agentClasses is undefined, the caller has not been updated to extract
+      // agent identities yet. Block and warn so stale callers surface in telemetry
+      // instead of silently bypassing the gate.
+      if (agentClasses === undefined) {
         warnMissingPlanningDispatchAgentClasses(unitType, policy.mode, tool);
         return {
           block: true,
           reason: blockReason(
             unitType,
             policy.mode,
-            `subagent dispatch missing agent identities for "${tool}"; planning-dispatch requires forwarded agentClasses before dispatch can run`,
+            `subagent dispatch blocked: stale caller did not supply agent identities for "${tool}"; update extractSubagentAgentClasses to handle this input shape`,
           ),
         };
+      }
+      // agentClasses was explicitly provided but resolved to an empty list (for
+      // example, a bare tool call with no agent field). Pass through; no agents
+      // to validate means the downstream tool call itself will fail.
+      if (requested.length === 0) {
+        return { block: false };
       }
       const globallyDisallowed = requested.find(a => !isReadOnlySpecialist(a));
       if (globallyDisallowed) {
