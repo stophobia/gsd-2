@@ -375,6 +375,33 @@ describe("buildEvalReviewContext", () => {
     const ctx = await buildEvalReviewContext(state, "M001");
     assert.ok(ctx.outputPath.endsWith("S07-EVAL-REVIEW.md"));
   });
+
+  it("emits the short fallback marker when AI-SPEC read fails with a verbose error", async () => {
+    const state = fakeReady({ summaryBytes: MAX_CONTEXT_BYTES - 80, specBytes: 256 });
+    rmSync(state.specPath!);
+    const ctx = await buildEvalReviewContext(state, "M001");
+    assert.equal(ctx.truncated, true);
+    assert.ok(ctx.spec, "spec must surface as a marker, not null");
+    assert.ok(ctx.spec!.includes("[truncated:"));
+    assert.ok(Buffer.byteLength(ctx.summary, "utf-8") + Buffer.byteLength(ctx.spec!, "utf-8") <= MAX_CONTEXT_BYTES);
+  });
+
+  it("does not load the full file into memory beyond the cap (regression: streaming readCapped)", async () => {
+    const summaryPath = join(sliceDir, "S07-SUMMARY.md");
+    const giant = MAX_CONTEXT_BYTES * 8;
+    writeFileSync(summaryPath, "S".repeat(giant), "utf-8");
+    const state: Extract<EvalReviewState, { kind: "ready" }> = {
+      kind: "ready",
+      sliceId: "S07",
+      sliceDir,
+      summaryPath,
+      specPath: null,
+    };
+    const ctx = await buildEvalReviewContext(state, "M001");
+    assert.equal(ctx.truncated, true);
+    assert.ok(Buffer.byteLength(ctx.summary, "utf-8") <= MAX_CONTEXT_BYTES);
+    assert.ok(ctx.summary.includes(`${giant - (MAX_CONTEXT_BYTES - 128 - 128)} bytes elided`));
+  });
 });
 
 // ─── evalReviewWritePath ──────────────────────────────────────────────────────

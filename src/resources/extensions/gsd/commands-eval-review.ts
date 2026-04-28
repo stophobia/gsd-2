@@ -27,7 +27,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import {
@@ -280,8 +280,11 @@ export async function buildEvalReviewContext(
   let specTruncated = false;
   if (state.specPath) {
     if (remaining < MIN_USEFUL_SPEC_BYTES) {
-      const elision = "[truncated: AI-SPEC.md omitted because SUMMARY.md consumed the context cap]";
-      if (Buffer.byteLength(elision, "utf-8") <= remaining) spec = elision;
+      spec = bestFitMarker(
+        remaining,
+        "[truncated: AI-SPEC.md omitted because SUMMARY.md consumed the context cap]",
+        "[truncated: AI-SPEC.md omitted]",
+      );
       specTruncated = true;
     } else {
       try {
@@ -290,8 +293,11 @@ export async function buildEvalReviewContext(
         specTruncated = specRead.truncated;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const failure = `[truncated: failed to read AI-SPEC.md (${msg})]`;
-        if (Buffer.byteLength(failure, "utf-8") <= remaining) spec = failure;
+        spec = bestFitMarker(
+          remaining,
+          `[truncated: failed to read AI-SPEC.md (${msg})]`,
+          "[truncated: failed to read AI-SPEC.md]",
+        );
         specTruncated = true;
       }
     }
@@ -322,27 +328,43 @@ interface CappedRead {
   readonly truncated: boolean;
 }
 
+function bestFitMarker(remaining: number, full: string, fallback: string): string | null {
+  if (Buffer.byteLength(full, "utf-8") <= remaining) return full;
+  if (Buffer.byteLength(fallback, "utf-8") <= remaining) return fallback;
+  return null;
+}
+
 async function readCapped(filePath: string, maxBytes: number): Promise<CappedRead> {
-  const buf = await readFile(filePath);
-  if (buf.byteLength <= maxBytes) {
+  const fh = await open(filePath, "r");
+  try {
+    const { size } = await fh.stat();
+    if (size <= maxBytes) {
+      const probe = Buffer.allocUnsafe(size);
+      const { bytesRead } = await fh.read(probe, 0, size, 0);
+      const buf = probe.subarray(0, bytesRead);
+      return {
+        content: buf.toString("utf-8"),
+        bytesUsed: buf.byteLength,
+        truncated: false,
+      };
+    }
+    const sliceBytes = Math.max(0, maxBytes - READ_MARKER_RESERVE_BYTES);
+    const probe = Buffer.allocUnsafe(sliceBytes);
+    const { bytesRead } = sliceBytes > 0
+      ? await fh.read(probe, 0, sliceBytes, 0)
+      : { bytesRead: 0 };
+    const head = new TextDecoder("utf-8").decode(probe.subarray(0, bytesRead), { stream: true });
+    const elided = size - bytesRead;
+    const marker = `\n\n[truncated: ${elided} bytes elided to fit eval-review context cap of ${maxBytes} bytes]\n`;
+    const content = `${head}${marker}`;
     return {
-      content: buf.toString("utf-8"),
-      bytesUsed: buf.byteLength,
-      truncated: false,
+      content,
+      bytesUsed: Buffer.byteLength(content, "utf-8"),
+      truncated: true,
     };
+  } finally {
+    await fh.close();
   }
-  // Reserve marker bytes up front so the marker plus head fit within maxBytes.
-  // stream: true drops any trailing partial UTF-8 sequence instead of emitting U+FFFD.
-  const sliceBytes = Math.max(0, maxBytes - READ_MARKER_RESERVE_BYTES);
-  const head = new TextDecoder("utf-8").decode(buf.subarray(0, sliceBytes), { stream: true });
-  const elided = buf.byteLength - sliceBytes;
-  const marker = `\n\n[truncated: ${elided} bytes elided to fit eval-review context cap of ${maxBytes} bytes]\n`;
-  const content = `${head}${marker}`;
-  return {
-    content,
-    bytesUsed: Buffer.byteLength(content, "utf-8"),
-    truncated: true,
-  };
 }
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
