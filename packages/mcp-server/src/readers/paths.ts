@@ -5,6 +5,85 @@ import { existsSync, statSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+// ---------------------------------------------------------------------------
+// Caching
+// ---------------------------------------------------------------------------
+//
+// Read-only MCP tools (gsd_progress, gsd_roadmap, gsd_doctor, …) hammer the
+// filesystem on every call: gsd_roadmap alone resolves milestone directories
+// 5–6× per milestone, and resolveGsdRoot can spawn `git rev-parse` for
+// non-direct .gsd/ layouts. Without caching, an MCP host pipelining several
+// tool calls blocks the event loop on dozens of redundant readdir/stat
+// syscalls per request.
+//
+// Two layers:
+//   * resolveGsdRoot — short TTL (the result depends on a possibly-expensive
+//     git subprocess; projectDir is stable for the life of an MCP session).
+//   * readdir-backed lookups — keyed on the directory's mtime, so any add/
+//     remove/rename invalidates the cache automatically.
+
+const GSD_ROOT_TTL_MS = 30_000;
+const gsdRootCache = new Map<string, { value: string; expiresAt: number }>();
+
+function cachedGsdRoot(projectDir: string): string | null {
+  const hit = gsdRootCache.get(projectDir);
+  if (!hit) return null;
+  if (hit.expiresAt < Date.now()) {
+    gsdRootCache.delete(projectDir);
+    return null;
+  }
+  return hit.value;
+}
+
+function rememberGsdRoot(projectDir: string, value: string): void {
+  gsdRootCache.set(projectDir, { value, expiresAt: Date.now() + GSD_ROOT_TTL_MS });
+}
+
+interface MtimeEntry<V> { mtimeMs: number; value: V }
+
+/**
+ * Read-through cache keyed on a directory path's mtime. Returns the cached
+ * value if the directory's mtime is unchanged since the last write; otherwise
+ * runs `compute` and stores the new result. Misses on read errors (ENOENT,
+ * EACCES) are cached via `compute`'s own return value, but the cache entry
+ * is dropped if the directory disappears later.
+ */
+function readWithMtimeCache<V>(
+  cache: Map<string, MtimeEntry<V>>,
+  cacheKey: string,
+  dir: string,
+  compute: () => V,
+): V {
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(dir).mtimeMs;
+  } catch {
+    cache.delete(cacheKey);
+    return compute();
+  }
+  const hit = cache.get(cacheKey);
+  if (hit && hit.mtimeMs === mtimeMs) return hit.value;
+  const value = compute();
+  cache.set(cacheKey, { mtimeMs, value });
+  return value;
+}
+
+const milestoneIdsCache = new Map<string, MtimeEntry<string[]>>();
+const milestoneDirCache = new Map<string, MtimeEntry<string | null>>();
+const sliceIdsCache = new Map<string, MtimeEntry<string[]>>();
+const sliceDirCache = new Map<string, MtimeEntry<string | null>>();
+const taskFilesCache = new Map<string, MtimeEntry<Array<{ id: string; hasPlan: boolean; hasSummary: boolean }>>>();
+
+/** @internal — exported for testing only */
+export function _resetReaderCaches(): void {
+  gsdRootCache.clear();
+  milestoneIdsCache.clear();
+  milestoneDirCache.clear();
+  sliceIdsCache.clear();
+  sliceDirCache.clear();
+  taskFilesCache.clear();
+}
+
 /**
  * Resolve the .gsd/ root directory for a project.
  *
@@ -17,9 +96,13 @@ import { execFileSync } from 'node:child_process';
 export function resolveGsdRoot(projectDir: string): string {
   const resolved = resolve(projectDir);
 
+  const cached = cachedGsdRoot(resolved);
+  if (cached) return cached;
+
   // Fast path: .gsd/ in the given directory
   const direct = join(resolved, '.gsd');
   if (existsSync(direct) && statSync(direct).isDirectory()) {
+    rememberGsdRoot(resolved, direct);
     return direct;
   }
 
@@ -32,6 +115,7 @@ export function resolveGsdRoot(projectDir: string): string {
     }).trim();
     const gitGsd = join(gitRoot, '.gsd');
     if (existsSync(gitGsd) && statSync(gitGsd).isDirectory()) {
+      rememberGsdRoot(resolved, gitGsd);
       return gitGsd;
     }
   } catch {
@@ -43,12 +127,13 @@ export function resolveGsdRoot(projectDir: string): string {
   while (dir !== dirname(dir)) {
     const candidate = join(dir, '.gsd');
     if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+      rememberGsdRoot(resolved, candidate);
       return candidate;
     }
     dir = dirname(dir);
   }
 
-  // Fallback
+  // Fallback — don't cache so that an init() call right after this is seen.
   return direct;
 }
 
@@ -70,16 +155,16 @@ export function findMilestoneIds(gsdRoot: string): string[] {
   const dir = milestonesDir(gsdRoot);
   if (!existsSync(dir)) return [];
 
-  const entries = readdirSync(dir, { withFileTypes: true });
-  const ids: string[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const match = entry.name.match(/^(M\d+)/);
-    if (match) ids.push(match[1]);
-  }
-
-  return ids.sort();
+  return readWithMtimeCache(milestoneIdsCache, dir, dir, () => {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const match = entry.name.match(/^(M\d+)/);
+      if (match) ids.push(match[1]);
+    }
+    return ids.sort();
+  });
 }
 
 /**
@@ -90,19 +175,21 @@ export function resolveMilestoneDir(gsdRoot: string, milestoneId: string): strin
   const dir = milestonesDir(gsdRoot);
   if (!existsSync(dir)) return null;
 
-  // Fast path: exact match
-  const exact = join(dir, milestoneId);
-  if (existsSync(exact) && statSync(exact).isDirectory()) return exact;
+  return readWithMtimeCache(milestoneDirCache, `${dir} ${milestoneId}`, dir, () => {
+    // Fast path: exact match
+    const exact = join(dir, milestoneId);
+    if (existsSync(exact) && statSync(exact).isDirectory()) return exact;
 
-  // Prefix match
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith(milestoneId)) {
-      return join(dir, entry.name);
+    // Prefix match
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.startsWith(milestoneId)) {
+        return join(dir, entry.name);
+      }
     }
-  }
 
-  return null;
+    return null;
+  });
 }
 
 /**
@@ -136,16 +223,16 @@ export function findSliceIds(gsdRoot: string, milestoneId: string): string[] {
   const slicesDir = join(mDir, 'slices');
   if (!existsSync(slicesDir)) return [];
 
-  const entries = readdirSync(slicesDir, { withFileTypes: true });
-  const ids: string[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const match = entry.name.match(/^(S\d+)/);
-    if (match) ids.push(match[1]);
-  }
-
-  return ids.sort();
+  return readWithMtimeCache(sliceIdsCache, slicesDir, slicesDir, () => {
+    const entries = readdirSync(slicesDir, { withFileTypes: true });
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const match = entry.name.match(/^(S\d+)/);
+      if (match) ids.push(match[1]);
+    }
+    return ids.sort();
+  });
 }
 
 /** Resolve the actual directory for a slice */
@@ -156,16 +243,18 @@ export function resolveSliceDir(gsdRoot: string, milestoneId: string, sliceId: s
   const slicesDir = join(mDir, 'slices');
   if (!existsSync(slicesDir)) return null;
 
-  const exact = join(slicesDir, sliceId);
-  if (existsSync(exact) && statSync(exact).isDirectory()) return exact;
+  return readWithMtimeCache(sliceDirCache, `${slicesDir} ${sliceId}`, slicesDir, () => {
+    const exact = join(slicesDir, sliceId);
+    if (existsSync(exact) && statSync(exact).isDirectory()) return exact;
 
-  const entries = readdirSync(slicesDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith(sliceId)) {
-      return join(slicesDir, entry.name);
+    const entries = readdirSync(slicesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.startsWith(sliceId)) {
+        return join(slicesDir, entry.name);
+      }
     }
-  }
-  return null;
+    return null;
+  });
 }
 
 /** Resolve a slice-level file (S01-PLAN.md, etc.) */
@@ -198,20 +287,22 @@ export function findTaskFiles(
   const tasksDir = join(sDir, 'tasks');
   if (!existsSync(tasksDir)) return [];
 
-  const files = readdirSync(tasksDir);
-  const taskMap = new Map<string, { hasPlan: boolean; hasSummary: boolean }>();
+  return readWithMtimeCache(taskFilesCache, tasksDir, tasksDir, () => {
+    const files = readdirSync(tasksDir);
+    const taskMap = new Map<string, { hasPlan: boolean; hasSummary: boolean }>();
 
-  for (const f of files) {
-    const match = f.match(/^(T\d+).*-(PLAN|SUMMARY)\.md$/i);
-    if (!match) continue;
-    const [, id, type] = match;
-    const existing = taskMap.get(id) ?? { hasPlan: false, hasSummary: false };
-    if (type.toUpperCase() === 'PLAN') existing.hasPlan = true;
-    if (type.toUpperCase() === 'SUMMARY') existing.hasSummary = true;
-    taskMap.set(id, existing);
-  }
+    for (const f of files) {
+      const match = f.match(/^(T\d+).*-(PLAN|SUMMARY)\.md$/i);
+      if (!match) continue;
+      const [, id, type] = match;
+      const existing = taskMap.get(id) ?? { hasPlan: false, hasSummary: false };
+      if (type.toUpperCase() === 'PLAN') existing.hasPlan = true;
+      if (type.toUpperCase() === 'SUMMARY') existing.hasSummary = true;
+      taskMap.set(id, existing);
+    }
 
-  return Array.from(taskMap.entries())
-    .map(([id, info]) => ({ id, ...info }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    return Array.from(taskMap.entries())
+      .map(([id, info]) => ({ id, ...info }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  });
 }
