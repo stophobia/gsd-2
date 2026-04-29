@@ -396,7 +396,10 @@ test("deep project setup: pending project research cannot dispatch PROJECT/S01",
     writeCapturedDeepPrefs(base);
     writeValidProjectAndRequirements(base);
     mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
-    writeFileSync(join(base, ".gsd", "runtime", "research-decision.json"), JSON.stringify({ decision: "research" }));
+    writeFileSync(
+      join(base, ".gsd", "runtime", "research-decision.json"),
+      JSON.stringify({ decision: "research", source: "research-decision" }),
+    );
 
     const s = new AutoSession();
     s.basePath = base;

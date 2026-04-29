@@ -71,11 +71,13 @@ import { markDepthVerified } from "./bootstrap/write-gate.js";
 import { ensureWorkflowPreferencesCaptured } from "./planning-depth.js";
 import { MILESTONE_ID_RE } from "./milestone-ids.js";
 import {
-  classifyProjectResearchScope,
-  getProjectResearchStatus,
-  writeProjectResearchAutoSkipDecision,
   PROJECT_RESEARCH_INFLIGHT_MARKER,
 } from "./project-research-policy.js";
+import {
+  isWorkflowPrefsCaptured,
+  resolveDeepProjectSetupState,
+  type DeepProjectSetupStage,
+} from "./deep-project-setup-policy.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -136,11 +138,7 @@ export interface DispatchRule {
 }
 
 export type DeepProjectStage =
-  | "workflow-preferences"
-  | "project"
-  | "requirements"
-  | "research-decision"
-  | "project-research";
+  DeepProjectSetupStage;
 
 export type DeepStageGate =
   | { status: "not-applicable"; stage: null; reason: string }
@@ -181,55 +179,6 @@ async function readUatGateVerdict(
 }
 
 /**
- * Read the YAML frontmatter from .gsd/PREFERENCES.md and check whether the
- * deep-mode workflow-preferences defaults have been captured. Uses an explicit
- * `workflow_prefs_captured: true` marker so a partial frontmatter (e.g.
- * just `commit_policy: merge`) does not falsely suppress the defaults write.
- */
-function isWorkflowPrefsCaptured(basePath: string): boolean {
-  const prefsPath = join(gsdRoot(basePath), "PREFERENCES.md");
-  if (!existsSync(prefsPath)) return false;
-  let content: string;
-  try {
-    content = readFileSync(prefsPath, "utf-8");
-  } catch {
-    return false;
-  }
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return false;
-  // Match a top-level "workflow_prefs_captured: true" line. The frontmatter is
-  // YAML; this lightweight regex avoids pulling in the YAML parser at the
-  // dispatch hot path. Treats only an explicit `true` value as captured.
-  return /^workflow_prefs_captured:\s*true\s*$/m.test(match[1]);
-}
-
-function maybeAutoSkipWorkflowDefaultedTrivialResearch(
-  basePath: string,
-  decisionSource: string | undefined,
-): boolean {
-  if (decisionSource !== "workflow-preferences") return false;
-  const root = gsdRoot(basePath);
-  const projectPath = join(root, "PROJECT.md");
-  const requirementsPath = join(root, "REQUIREMENTS.md");
-  if (!existsSync(projectPath) || !existsSync(requirementsPath)) return false;
-  if (!validateArtifact(projectPath, "project").ok) return false;
-  if (!validateArtifact(requirementsPath, "requirements").ok) return false;
-
-  try {
-    const classification = classifyProjectResearchScope(
-      readFileSync(projectPath, "utf-8"),
-      readFileSync(requirementsPath, "utf-8"),
-    );
-    if (classification.variant !== "trivial") return false;
-    writeProjectResearchAutoSkipDecision(basePath, classification);
-    return true;
-  } catch (err) {
-    logWarning("dispatch", `project research fast-path classification failed — running research: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
-  }
-}
-
-/**
  * Deep planning mode: check whether any project-level stage gate
  * (workflow-preferences, discuss-project, discuss-requirements,
  * research-decision, research-project) still has work pending.
@@ -240,126 +189,7 @@ function maybeAutoSkipWorkflowDefaultedTrivialResearch(
  * rules behave exactly as before.
  */
 export function getDeepStageGate(prefs: GSDPreferences | undefined, basePath: string): DeepStageGate {
-  if (prefs?.planning_depth !== "deep") {
-    return {
-      status: "not-applicable",
-      stage: null,
-      reason: "Deep planning mode is not enabled.",
-    };
-  }
-  const root = gsdRoot(basePath);
-  // 1. workflow-preferences captured (explicit marker in PREFERENCES.md frontmatter).
-  if (!isWorkflowPrefsCaptured(basePath)) {
-    return {
-      status: "pending",
-      stage: "workflow-preferences",
-      reason: ".gsd/PREFERENCES.md is missing workflow_prefs_captured: true.",
-    };
-  }
-  // 2. PROJECT.md exists and passes validation.
-  const projectPath = join(root, "PROJECT.md");
-  if (!existsSync(projectPath)) {
-    return {
-      status: "pending",
-      stage: "project",
-      reason: ".gsd/PROJECT.md is missing.",
-    };
-  }
-  if (!validateArtifact(projectPath, "project").ok) {
-    return {
-      status: "pending",
-      stage: "project",
-      reason: ".gsd/PROJECT.md is invalid.",
-    };
-  }
-  // 3. REQUIREMENTS.md exists and passes validation.
-  const requirementsPath = join(root, "REQUIREMENTS.md");
-  if (!existsSync(requirementsPath)) {
-    return {
-      status: "pending",
-      stage: "requirements",
-      reason: ".gsd/REQUIREMENTS.md is missing.",
-    };
-  }
-  if (!validateArtifact(requirementsPath, "requirements").ok) {
-    return {
-      status: "pending",
-      stage: "requirements",
-      reason: ".gsd/REQUIREMENTS.md is invalid.",
-    };
-  }
-  // 4. research-decision marker exists.
-  const decisionPath = join(root, "runtime", "research-decision.json");
-  if (!existsSync(decisionPath)) {
-    return {
-      status: "pending",
-      stage: "research-decision",
-      reason: ".gsd/runtime/research-decision.json is missing.",
-    };
-  }
-  // 5. Decision must be one of the recognized values; if not, the
-  // research-decision rule will re-ask. Any value other than "research" or
-  // "skip" — including a missing field, malformed JSON, or "garbage" — must
-  // be treated as pending here, otherwise this guard reports "all gates
-  // passed" while the downstream research-decision rule disagrees.
-  try {
-    const cfg = JSON.parse(readFileSync(decisionPath, "utf-8")) as Record<string, unknown>;
-    const decision = typeof cfg.decision === "string" ? cfg.decision : undefined;
-    const decisionSource = typeof cfg.source === "string" ? cfg.source : undefined;
-    if (decision !== "research" && decision !== "skip") {
-      return {
-        status: "pending",
-        stage: "research-decision",
-        reason: ".gsd/runtime/research-decision.json has no valid research|skip decision.",
-      };
-    }
-    if (decision === "research") {
-      if (maybeAutoSkipWorkflowDefaultedTrivialResearch(basePath, decisionSource)) {
-        return {
-          status: "complete",
-          stage: null,
-          reason: "Trivial workflow-defaulted project research was auto-skipped.",
-        };
-      }
-      const researchStatus = getProjectResearchStatus(basePath);
-      if (researchStatus.globalBlocker) {
-        return {
-          status: "blocked",
-          stage: "project-research",
-          reason:
-            "Project research wrote PROJECT-RESEARCH-BLOCKER.md, so no verified research exists. Fix the blocker cause, delete the blocker, and rerun auto.",
-        };
-      }
-      if (researchStatus.allDimensionBlockers) {
-        return {
-          status: "blocked",
-          stage: "project-research",
-          reason:
-            "Project research produced only dimension blocker files, so no usable research exists. Fix the blocker cause, delete the dimension blocker files in `.gsd/research/`, and rerun auto.",
-        };
-      }
-      if (!researchStatus.complete) {
-        return {
-          status: "pending",
-          stage: "project-research",
-          reason: researchStatus.missingDimensions.length > 0
-            ? `Project research is missing dimensions: ${researchStatus.missingDimensions.join(", ")}.`
-            : "Project research has not produced a verified research set.",
-        };
-      }
-    }
-  } catch {
-    return {
-      status: "pending",
-      stage: "research-decision",
-      reason: ".gsd/runtime/research-decision.json is malformed.",
-    };
-  }
-  return {
-    status: "complete",
-    stage: null,
-    reason: "All deep project setup gates are complete.",
-  };
+  return resolveDeepProjectSetupState(prefs, basePath);
 }
 
 export function hasPendingDeepStage(prefs: GSDPreferences | undefined, basePath: string): boolean {
@@ -770,22 +600,8 @@ export const DISPATCH_RULES: DispatchRule[] = [
     match: async ({ state, basePath, prefs, structuredQuestionsAvailable }) => {
       if (prefs?.planning_depth !== "deep") return null;
       if (state.phase !== "pre-planning" && state.phase !== "needs-discussion") return null;
-      const requirementsPath = join(gsdRoot(basePath), "REQUIREMENTS.md");
-      if (!existsSync(requirementsPath)) return null; // earlier rule handles
-      const decisionPath = join(gsdRoot(basePath), "runtime", "research-decision.json");
-      if (existsSync(decisionPath)) {
-        // I3: a corrupted decision marker must NOT silently fall through to
-        // milestone planning — re-ask. Treat any parse error or missing
-        // decision field as "not yet decided".
-        try {
-          const cfg = JSON.parse(readFileSync(decisionPath, "utf-8")) as Record<string, unknown>;
-          const decision = typeof cfg.decision === "string" ? cfg.decision : undefined;
-          if (decision === "research" || decision === "skip") return null; // valid — fall through
-          logWarning("dispatch", `research-decision.json missing or has unrecognized "decision" field — re-asking`);
-        } catch (err) {
-          logWarning("dispatch", `malformed research-decision.json — re-asking: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
+      const gate = resolveDeepProjectSetupState(prefs, basePath);
+      if (gate.status !== "pending" || gate.stage !== "research-decision") return null;
       return {
         action: "dispatch",
         unitType: "research-decision",
@@ -805,35 +621,15 @@ export const DISPATCH_RULES: DispatchRule[] = [
     match: async ({ state, basePath, prefs, structuredQuestionsAvailable }) => {
       if (prefs?.planning_depth !== "deep") return null;
       if (state.phase !== "pre-planning" && state.phase !== "needs-discussion") return null;
-      const requirementsPath = join(gsdRoot(basePath), "REQUIREMENTS.md");
-      if (!existsSync(requirementsPath)) return null; // earlier rule handles
-      const decisionPath = join(gsdRoot(basePath), "runtime", "research-decision.json");
-      if (!existsSync(decisionPath)) return null; // research-decision rule handles
-      let decision: string | undefined;
-      let decisionSource: string | undefined;
-      try {
-        const cfg = JSON.parse(readFileSync(decisionPath, "utf-8")) as Record<string, unknown>;
-        decision = typeof cfg.decision === "string" ? cfg.decision : undefined;
-        decisionSource = typeof cfg.source === "string" ? cfg.source : undefined;
-      } catch (err) {
-        logWarning("dispatch", `malformed research-decision.json — leaving for research-decision rule to re-ask: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      }
-      if (decision !== "research") return null; // user picked "skip" — fall through
-      if (maybeAutoSkipWorkflowDefaultedTrivialResearch(basePath, decisionSource)) return null;
-      const researchStatus = getProjectResearchStatus(basePath);
-      if (researchStatus.blocked) {
-        const blockerReason = researchStatus.globalBlocker
-          ? "Project research wrote PROJECT-RESEARCH-BLOCKER.md, so no verified research exists."
-          : "Project research produced only blocker files, so no usable research exists.";
+      const gate = resolveDeepProjectSetupState(prefs, basePath);
+      if (gate.status === "blocked" && gate.stage === "project-research") {
         return {
           action: "stop" as const,
-          reason:
-            `${blockerReason} Fix the blocker cause, delete the blocker files in \`.gsd/research/\`, and rerun auto.`,
+          reason: gate.reason,
           level: "warning" as const,
         };
       }
-      if (researchStatus.complete) return null; // already done — fall through
+      if (gate.status !== "pending" || gate.stage !== "project-research") return null;
       // Idempotency guard: one orchestrator owns the project research fan-out
       // until guided-research-project.md deletes this marker during closeout.
       const runtimeDir = join(gsdRoot(basePath), "runtime");

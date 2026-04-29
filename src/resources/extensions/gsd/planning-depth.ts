@@ -6,10 +6,14 @@
 // frontmatter keys.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { getProjectGSDPreferencesPath } from "./preferences.js";
 import { logWarning } from "./workflow-logger.js";
+import {
+  researchDecisionPath,
+  writeDefaultResearchSkipDecision,
+} from "./deep-project-setup-policy.js";
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
@@ -117,29 +121,18 @@ function applyDeepWorkflowPreferenceDefaults(frontmatter: Record<string, unknown
 }
 
 function ensureResearchDecisionDefault(basePath: string): void {
-  const runtimeDir = join(dirname(getProjectGSDPreferencesPath(basePath)), "runtime");
-  const decisionPath = join(runtimeDir, "research-decision.json");
-  let decision = "research";
-
+  const decisionPath = researchDecisionPath(basePath);
   if (existsSync(decisionPath)) {
     try {
       const parsed = JSON.parse(readFileSync(decisionPath, "utf-8")) as Record<string, unknown>;
-      if (parsed.decision === "skip") {
-        decision = "skip";
+      const source = typeof parsed.source === "string" ? parsed.source : undefined;
+      if (parsed.decision === "research" && (source === "research-decision" || source === "user")) {
+        return;
       }
+      if (parsed.decision === "skip" && source !== "workflow-preferences") return;
     } catch {
       // Invalid runtime marker is replaced with the default decision.
     }
   }
-
-  mkdirSync(runtimeDir, { recursive: true });
-  writeFileSync(
-    decisionPath,
-    `${JSON.stringify({
-      decision,
-      decided_at: new Date().toISOString(),
-      source: "workflow-preferences",
-    }, null, 2)}\n`,
-    "utf-8",
-  );
+  writeDefaultResearchSkipDecision(basePath);
 }

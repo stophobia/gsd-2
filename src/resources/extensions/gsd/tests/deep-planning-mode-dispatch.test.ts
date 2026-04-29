@@ -51,7 +51,7 @@ const VALID_PROJECT_MD = [
   "",
   "## Milestone Sequence",
   "",
-  "- [ ] M001: Test - exercise deep planning dispatch",
+  "- [ ] M001: Test — exercise deep planning dispatch",
   "",
 ].join("\n");
 
@@ -60,7 +60,7 @@ const VALID_REQUIREMENTS_MD = [
   "",
   "## Active",
   "",
-  "### R001 - Dispatch valid artifacts",
+  "### R001 — Dispatch valid artifacts",
   "- Class: core-capability",
   "- Status: active",
   "- Description: Valid artifacts allow deep-mode dispatch to advance.",
@@ -114,7 +114,7 @@ const TINY_TODO_PROJECT_MD = [
   "",
   "## Milestone Sequence",
   "",
-  "- [ ] M001: Todo App - build one-page local task capture",
+  "- [ ] M001: Todo App — build one-page local task capture",
   "",
 ].join("\n");
 
@@ -123,7 +123,7 @@ const TINY_TODO_REQUIREMENTS_MD = [
   "",
   "## Active",
   "",
-  "### R001 - Fast task capture",
+  "### R001 — Fast task capture",
   "- Class: primary-user-loop",
   "- Status: active",
   "- Description: User can add a task quickly from the browser.",
@@ -134,7 +134,7 @@ const TINY_TODO_REQUIREMENTS_MD = [
   "- Validation: Add a task from the page.",
   "- Notes: single file",
   "",
-  "### R002 - Task completion with done section",
+  "### R002 — Task completion with done section",
   "- Class: primary-user-loop",
   "- Status: active",
   "- Description: User can mark a task done and see it in a done section.",
@@ -145,7 +145,7 @@ const TINY_TODO_REQUIREMENTS_MD = [
   "- Validation: Mark a task done from the page.",
   "- Notes: static html",
   "",
-  "### R003 - Optional due date on tasks",
+  "### R003 — Optional due date on tasks",
   "- Class: core-capability",
   "- Status: active",
   "- Description: User can add an optional due date to a task.",
@@ -156,7 +156,7 @@ const TINY_TODO_REQUIREMENTS_MD = [
   "- Validation: Add a task with a due date.",
   "- Notes: browser-based",
   "",
-  "### R004 - Static HTML/CSS/JS, no backend",
+  "### R004 — Static HTML/CSS/JS, no backend",
   "- Class: constraint",
   "- Status: active",
   "- Description: The app is static HTML/CSS/JS with no backend, no server, and no build step.",
@@ -167,7 +167,7 @@ const TINY_TODO_REQUIREMENTS_MD = [
   "- Validation: Open the file directly in a browser.",
   "- Notes: client-only",
   "",
-  "### R005 - Tasks persist across page reloads",
+  "### R005 — Tasks persist across page reloads",
   "- Class: continuity",
   "- Status: active",
   "- Description: Tasks persist in localStorage across reloads.",
@@ -184,7 +184,7 @@ const TINY_TODO_REQUIREMENTS_MD = [
   "",
   "## Out of Scope",
   "",
-  "### R006 - No sync or accounts",
+  "### R006 — No sync or accounts",
   "- Class: anti-feature",
   "- Status: out-of-scope",
   "- Description: The app does not support sync, accounts, or cloud storage.",
@@ -239,6 +239,13 @@ function writeValidRequirements(base: string): void {
 function writeTinyTodoProject(base: string): void {
   writeFileSync(join(base, ".gsd", "PROJECT.md"), TINY_TODO_PROJECT_MD);
   writeFileSync(join(base, ".gsd", "REQUIREMENTS.md"), TINY_TODO_REQUIREMENTS_MD);
+}
+
+function writeCapturedDeepPrefs(base: string): void {
+  writeFileSync(
+    join(base, ".gsd", "PREFERENCES.md"),
+    "---\nplanning_depth: deep\nworkflow_prefs_captured: true\n---\n",
+  );
 }
 
 function makeCtx(
@@ -432,6 +439,7 @@ test("Deep mode: discuss-requirements DOES dispatch when PROJECT.md exists and R
 test("Deep mode: discuss-requirements does NOT dispatch when REQUIREMENTS.md already exists and is valid", async (t) => {
   const base = makeIsolatedBaseWithCleanup(t);
 
+  writeCapturedDeepPrefs(base);
   writeValidProject(base);
   writeValidRequirements(base);
   const prefs = { planning_depth: "deep" } as GSDPreferences;
@@ -474,18 +482,19 @@ test("Deep mode: research-decision does NOT dispatch when REQUIREMENTS.md missin
   assert.strictEqual(result, null, "REQUIREMENTS.md must exist before research decision is asked");
 });
 
-test("Deep mode: research-decision DOES dispatch when REQUIREMENTS.md exists and no decision marker", async (t) => {
+test("Deep mode: research-decision does NOT dispatch when marker is missing because default is skip", async (t) => {
   const base = makeIsolatedBaseWithCleanup(t);
 
+  writeCapturedDeepPrefs(base);
   writeValidProject(base);
   writeValidRequirements(base);
   const prefs = { planning_depth: "deep" } as GSDPreferences;
   const result = await rule(RESEARCH_DECISION_RULE_NAME).match(makeCtx(base, prefs));
-  assert.ok(result && result.action === "dispatch");
-  if (result.action === "dispatch") {
-    assert.strictEqual(result.unitType, "research-decision");
-    assert.strictEqual(result.unitId, "RESEARCH-DECISION");
-  }
+  assert.strictEqual(result, null);
+  const decision = JSON.parse(readFileSync(join(base, ".gsd", "runtime", "research-decision.json"), "utf-8"));
+  assert.equal(decision.decision, "skip");
+  assert.equal(decision.source, "workflow-preferences");
+  assert.equal(decision.reason, "missing-default-repair");
 });
 
 test("Deep mode: research-decision does NOT dispatch when decision marker exists", async (t) => {
@@ -503,12 +512,13 @@ test("Deep mode: research-decision does NOT dispatch when decision marker exists
 // ─── research-project rule ────────────────────────────────────────────────
 
 function setupReadyForResearchProject(base: string): void {
+  writeCapturedDeepPrefs(base);
   writeValidProject(base);
   writeValidRequirements(base);
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
     join(base, ".gsd", "runtime", "research-decision.json"),
-    JSON.stringify({ decision: "research", decided_at: "2026-04-27T00:00:00Z" }),
+    JSON.stringify({ decision: "research", source: "research-decision", decided_at: "2026-04-27T00:00:00Z" }),
   );
 }
 
@@ -560,13 +570,10 @@ test("Deep mode: research-project DOES dispatch when decision is 'research' and 
   );
 });
 
-test("Deep mode: research-project auto-skips tiny static apps when research was workflow-defaulted", async (t) => {
+test("Deep mode: research-project normalizes legacy workflow-defaulted research to skip", async (t) => {
   const base = makeIsolatedBaseWithCleanup(t);
 
-  writeFileSync(
-    join(base, ".gsd", "PREFERENCES.md"),
-    "---\nplanning_depth: deep\nworkflow_prefs_captured: true\n---\n",
-  );
+  writeCapturedDeepPrefs(base);
   writeTinyTodoProject(base);
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
@@ -590,20 +597,16 @@ test("Deep mode: research-project auto-skips tiny static apps when research was 
 
   const decision = JSON.parse(readFileSync(join(base, ".gsd", "runtime", "research-decision.json"), "utf-8"));
   assert.equal(decision.decision, "skip");
-  assert.equal(decision.source, "project-research-fast-path");
+  assert.equal(decision.source, "workflow-preferences");
   assert.equal(decision.previous_source, "workflow-preferences");
-  assert.equal(decision.reason, "trivial-static-local-project");
-  assert.equal(decision.classifier_variant, "trivial");
+  assert.equal(decision.reason, "legacy-workflow-research-default");
   assert.equal(getDeepStageGate(prefs, base).status, "complete");
 });
 
-test("Deep mode gate auto-skips tiny static apps even with stale research blockers", (t) => {
+test("Deep mode gate ignores stale blockers for legacy workflow-defaulted research", (t) => {
   const base = makeIsolatedBaseWithCleanup(t);
 
-  writeFileSync(
-    join(base, ".gsd", "PREFERENCES.md"),
-    "---\nplanning_depth: deep\nworkflow_prefs_captured: true\n---\n",
-  );
+  writeCapturedDeepPrefs(base);
   writeTinyTodoProject(base);
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
@@ -630,30 +633,32 @@ test("Deep mode gate auto-skips tiny static apps even with stale research blocke
   assert.equal(hasPendingDeepStage(prefs, base), false);
   const decision = JSON.parse(readFileSync(join(base, ".gsd", "runtime", "research-decision.json"), "utf-8"));
   assert.equal(decision.decision, "skip");
-  assert.equal(decision.source, "project-research-fast-path");
+  assert.equal(decision.source, "workflow-preferences");
   assert.equal(decision.previous_source, "workflow-preferences");
 });
 
 test("Deep mode: research-project honors explicit research decisions for tiny static apps", async (t) => {
   const base = makeIsolatedBaseWithCleanup(t);
 
+  writeCapturedDeepPrefs(base);
   writeTinyTodoProject(base);
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
     join(base, ".gsd", "runtime", "research-decision.json"),
-    JSON.stringify({ decision: "research", decided_at: "2026-04-27T00:00:00Z" }),
+    JSON.stringify({ decision: "research", source: "research-decision", decided_at: "2026-04-27T00:00:00Z" }),
   );
 
   const prefs = { planning_depth: "deep" } as GSDPreferences;
   const result = await rule(RESEARCH_PROJECT_RULE_NAME).match(makeCtx(base, prefs));
 
-  assert.ok(result && result.action === "dispatch", "missing source means conservative explicit research");
+  assert.ok(result && result.action === "dispatch", "explicit user-sourced research should still run");
   assert.equal(existsSync(join(base, ".gsd", "runtime", "research-project-inflight")), true);
 });
 
-test("Deep mode: research-project still dispatches non-trivial workflow-defaulted research", async (t) => {
+test("Deep mode: research-project does not dispatch non-trivial workflow-defaulted research", async (t) => {
   const base = makeIsolatedBaseWithCleanup(t);
 
+  writeCapturedDeepPrefs(base);
   writeValidProject(base);
   writeValidRequirements(base);
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
@@ -669,8 +674,11 @@ test("Deep mode: research-project still dispatches non-trivial workflow-defaulte
   const prefs = { planning_depth: "deep" } as GSDPreferences;
   const result = await rule(RESEARCH_PROJECT_RULE_NAME).match(makeCtx(base, prefs));
 
-  assert.ok(result && result.action === "dispatch");
-  assert.equal(existsSync(join(base, ".gsd", "runtime", "research-project-inflight")), true);
+  assert.equal(result, null);
+  assert.equal(existsSync(join(base, ".gsd", "runtime", "research-project-inflight")), false);
+  const decision = JSON.parse(readFileSync(join(base, ".gsd", "runtime", "research-decision.json"), "utf-8"));
+  assert.equal(decision.decision, "skip");
+  assert.equal(decision.reason, "legacy-workflow-research-default");
 });
 
 test("Deep mode: research-project clears in-flight marker when prompt assembly fails", async (t) => {
@@ -747,7 +755,7 @@ test("Deep mode: research-project stops when every dimension is only a BLOCKER",
   const prefs = { planning_depth: "deep" } as GSDPreferences;
   const result = await rule(RESEARCH_PROJECT_RULE_NAME).match(makeCtx(base, prefs));
   assert.equal(result?.action, "stop");
-  assert.match(result?.action === "stop" ? result.reason : "", /only blocker files/);
+  assert.match(result?.action === "stop" ? result.reason : "", /only dimension blocker files/);
 });
 
 test("Deep mode: research-project stops on global PROJECT-RESEARCH-BLOCKER", async (t) => {

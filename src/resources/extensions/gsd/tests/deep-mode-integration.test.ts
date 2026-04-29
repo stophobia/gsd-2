@@ -235,7 +235,7 @@ test("integration: deep mode + invalid REQUIREMENTS.md → discuss-requirements,
   }
 });
 
-test("integration: deep mode + REQUIREMENTS.md + no research-decision → research-decision", async (t) => {
+test("integration: deep mode + REQUIREMENTS.md + no research-decision → discuss-milestone", async (t) => {
   const base = makeIsolatedBase();
   t.after(() => { try { rmSync(base, { recursive: true, force: true }); } catch {} });
 
@@ -247,8 +247,11 @@ test("integration: deep mode + REQUIREMENTS.md + no research-decision → resear
   const result = await resolveDispatch(makeCtx(base, prefs, "needs-discussion"));
   assert.strictEqual(result.action, "dispatch");
   if (result.action === "dispatch") {
-    assert.strictEqual(result.unitType, "research-decision");
+    assert.strictEqual(result.unitType, "discuss-milestone");
   }
+  const decision = JSON.parse(readFileSync(join(base, ".gsd", "runtime", "research-decision.json"), "utf-8"));
+  assert.equal(decision.decision, "skip");
+  assert.equal(decision.reason, "missing-default-repair");
 });
 
 test("integration: deep mode + decision=research + research files missing → research-project", async (t) => {
@@ -261,7 +264,7 @@ test("integration: deep mode + decision=research + research files missing → re
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
     join(base, ".gsd", "runtime", "research-decision.json"),
-    JSON.stringify({ decision: "research" }),
+    JSON.stringify({ decision: "research", source: "research-decision" }),
   );
 
   const prefs = { planning_depth: "deep" } as GSDPreferences;
@@ -282,7 +285,7 @@ test("integration: deep mode + research-project marker → stop, not discuss-mil
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
     join(base, ".gsd", "runtime", "research-decision.json"),
-    JSON.stringify({ decision: "research" }),
+    JSON.stringify({ decision: "research", source: "research-decision" }),
   );
   writeFileSync(join(base, ".gsd", "runtime", "research-project-inflight"), "{}\n");
 
@@ -304,7 +307,7 @@ test("integration: deep mode + decision=research + dimension blocker → discuss
   mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
   writeFileSync(
     join(base, ".gsd", "runtime", "research-decision.json"),
-    JSON.stringify({ decision: "research" }),
+    JSON.stringify({ decision: "research", source: "research-decision" }),
   );
   mkdirSync(join(base, ".gsd", "research"), { recursive: true });
   for (const name of ["STACK.md", "FEATURES.md", "ARCHITECTURE.md"]) {
@@ -349,11 +352,7 @@ test("integration: deep mode + decision=skip → falls through to discuss-milest
   }
 });
 
-test("integration: deep mode + decision=<garbage> → research-decision (NOT discuss-milestone)", async (t) => {
-  // Regression test for peer-review finding: hasPendingDeepStage previously
-  // only treated decision === "research" as needing follow-up files;
-  // anything else (including unrecognized values) silently passed the gate
-  // and the milestone rule fired before research-decision could re-ask.
+test("integration: deep mode + decision=<garbage> repairs to skip and discusses milestone", async (t) => {
   const base = makeIsolatedBase();
   t.after(() => { try { rmSync(base, { recursive: true, force: true }); } catch {} });
 
@@ -372,10 +371,13 @@ test("integration: deep mode + decision=<garbage> → research-decision (NOT dis
   if (result.action === "dispatch") {
     assert.strictEqual(
       result.unitType,
-      "research-decision",
-      "unrecognized decision value must re-ask via research-decision, not advance to milestone work",
+      "discuss-milestone",
+      "malformed or unrecognized default research markers should repair to skip and advance",
     );
   }
+  const decision = JSON.parse(readFileSync(join(base, ".gsd", "runtime", "research-decision.json"), "utf-8"));
+  assert.equal(decision.decision, "skip");
+  assert.equal(decision.reason, "malformed-default-repair");
 });
 
 // ─── Light-mode regression check ──────────────────────────────────────────

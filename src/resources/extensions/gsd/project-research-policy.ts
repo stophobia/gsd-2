@@ -86,7 +86,6 @@ function selectedSections(sections: Record<string, string>): string {
     "Current State",
     "Architecture / Key Patterns",
     "Constraints",
-    "Anti-goals",
     "Milestone Sequence",
   ]
     .map((name) => sections[name] ?? "")
@@ -106,17 +105,7 @@ export function classifyProjectResearchScope(
   const activeCapabilities = activeRequirements.filter((r) =>
     r.class !== "constraint" && r.class !== "anti-feature"
   );
-  const explicitConstraints = requirements.requirements.filter((r) =>
-    r.class === "constraint" ||
-    r.class === "anti-feature" ||
-    r.parentSection === "Out of Scope" ||
-    r.status === "out-of-scope"
-  );
-
-  const requirementCoverage = [
-    ...activeRequirements,
-    ...explicitConstraints,
-  ]
+  const requirementCoverage = activeRequirements
     .map((r) => [
       r.id,
       r.title,
