@@ -22,3 +22,15 @@ test("change tracker resolves relative tool paths from the workspace root", () =
 	assert.match(source, /path\.resolve\(this\.workspaceRoot, rawPath\)/);
 	assert.match(extensionSource, /new GsdChangeTracker\(client, cwd\)/);
 });
+
+test("change tracker models new files as absent snapshots", () => {
+	assert.match(source, /snapshots: Map<string, string \| null>/);
+	assert.match(source, /this\.originals\.set\(filePath, null\)/);
+	assert.match(source, /await fs\.promises\.rm\(filePath, \{ force: true \}\)/);
+});
+
+test("checkpoints capture current tracked file contents, not original session contents", () => {
+	assert.match(source, /snapshots: this\.captureCurrentSnapshots\(\)/);
+	assert.match(source, /fs\.readFileSync\(filePath, "utf8"\)/);
+	assert.doesNotMatch(source, /snapshots: new Map\(this\.originals\)/);
+});
